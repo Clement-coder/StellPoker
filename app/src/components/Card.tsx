@@ -1,25 +1,40 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { decodeCard } from "@/lib/cards";
 
 interface CardProps {
   value?: number;
   faceDown?: boolean;
   size?: "sm" | "md" | "lg";
+  /**
+   * Play a 3D back-to-front flip when the (face-up) card mounts — used for
+   * dealing hole cards and revealing community cards. Ignored for face-down
+   * cards. Respects `prefers-reduced-motion` (see globals.css).
+   */
+  flip?: boolean;
+  /** Stagger delay in seconds applied to the flip animation. */
+  flipDelay?: number;
 }
+
+type CardDims = {
+  w: number;
+  h: number;
+  suitSize: string;
+  rankSize: string;
+};
+
+const DIMS: Record<NonNullable<CardProps["size"]>, CardDims> = {
+  sm: { w: 44, h: 62, suitSize: "16px", rankSize: "7px" },
+  md: { w: 56, h: 80, suitSize: "22px", rankSize: "9px" },
+  lg: { w: 72, h: 100, suitSize: "28px", rankSize: "11px" },
+};
 
 const SUIT_SYMBOLS: Record<string, string> = {
   hearts: '♥',
   diamonds: '♦',
   clubs: '♣',
   spades: '♠',
-};
-
-const SUIT_COLORS: Record<string, string> = {
-  hearts: '#e74c3c',
-  diamonds: '#e74c3c',
-  clubs: '#2c3e50',
-  spades: '#2c3e50',
 };
 
 /* Pixel card back: dark blue with a small star/S pattern */
@@ -56,26 +71,15 @@ function CardBack({ w, h }: { w: number; h: number }) {
   );
 }
 
-export function Card({ value, faceDown = false, size = "md" }: CardProps) {
-  const dims = {
-    sm: { w: 44, h: 62, suitSize: '16px', rankSize: '7px' },
-    md: { w: 56, h: 80, suitSize: '22px', rankSize: '9px' },
-    lg: { w: 72, h: 100, suitSize: '28px', rankSize: '11px' },
-  };
-  const d = dims[size];
-
-  if (faceDown || value === undefined) {
-    return <CardBack w={d.w} h={d.h} />;
-  }
-
+/* The face (rank + suit) of a revealed card. */
+function CardFace({ value, d, className }: { value: number; d: CardDims; className?: string }) {
   const card = decodeCard(value);
   const color = card.color === 'red' ? '#e74c3c' : '#2c3e50';
-
   const suitSymbol = SUIT_SYMBOLS[card.suit] || '♠';
 
   return (
     <div
-      className="pixel-border-white flex flex-col items-center justify-between animate-card-deal"
+      className={`pixel-border-white flex flex-col items-center justify-between${className ? ` ${className}` : ''}`}
       style={{
         width: `${d.w}px`,
         height: `${d.h}px`,
@@ -116,4 +120,33 @@ export function Card({ value, faceDown = false, size = "md" }: CardProps) {
       </div>
     </div>
   );
+}
+
+export function Card({ value, faceDown = false, size = "md", flip = false, flipDelay = 0 }: CardProps) {
+  const d = DIMS[size];
+
+  if (faceDown || value === undefined) {
+    return <CardBack w={d.w} h={d.h} />;
+  }
+
+  // 3D flip: render both faces and rotate from back (180deg) to front (0deg).
+  if (flip) {
+    return (
+      <div
+        className="card-flip"
+        style={{ width: `${d.w}px`, height: `${d.h}px`, "--flip-delay": `${flipDelay}s` } as CSSProperties}
+      >
+        <div className="card-flip-inner">
+          <div className="card-flip-face card-flip-back">
+            <CardBack w={d.w} h={d.h} />
+          </div>
+          <div className="card-flip-face card-flip-front">
+            <CardFace value={value} d={d} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <CardFace value={value} d={d} className="animate-card-deal" />;
 }

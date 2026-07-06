@@ -1,9 +1,11 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import type { GameState, GamePhase } from "@/lib/game-state";
 import * as api from "@/lib/api";
 import { joinTableOnChain, playerActionOnChain } from "@/lib/onchain";
 import type { WalletSession } from "@/lib/wallet";
 import { computeSoloBet } from "./use-solo-betting";
+import { useJoinTableSimulation, usePlayerActionSimulation } from "./use-transaction-simulation";
+import type { SimulationResult } from "./transaction-simulation";
 
 type PlayMode = "single" | "headsup" | "multi";
 
@@ -67,6 +69,21 @@ export function usePokerActions(config: PokerActionsConfig) {
     hydrateMyCards,
   } = config;
 
+  const [pendingAction, setPendingAction] = useState<{
+    action: string;
+    amount?: number;
+  } | null>(null);
+
+  const joinTableSim = useJoinTableSimulation(wallet, async () => {
+    await syncOnChainState();
+    await hydrateMyCards(wallet!);
+  });
+
+  const playerActionSim = usePlayerActionSimulation(wallet, async () => {
+    await syncOnChainState();
+    setPendingAction(null);
+  });
+
   const claimedWallets = (lobby?.seats ?? [])
     .map((seat) => seat.wallet_address)
     .filter((address): address is string => !!address);
@@ -88,15 +105,14 @@ export function usePokerActions(config: PokerActionsConfig) {
           : undefined;
       const buyIn = toBigInt(minBuyInRaw, BigInt("1000000000"));
 
-      await joinTableOnChain(wallet, tableId, buyIn);
-      await syncOnChainState();
-      await hydrateMyCards(wallet);
+      // Start simulation instead of direct execution
+      joinTableSim.joinTable(tableId, buyIn);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Join table failed");
     } finally {
       setJoiningTable(false);
     }
-  }, [hydrateMyCards, syncOnChainState, tableId, wallet, setError, setJoiningTable]);
+  }, [joinTableSim, tableId, wallet, setError, setJoiningTable]);
 
   const resolvePlayersForDeal = useCallback((): string[] | null => {
     if (!wallet) {
@@ -367,13 +383,14 @@ export function usePokerActions(config: PokerActionsConfig) {
             typeof amount === "number" && Number.isFinite(amount)
               ? Math.max(1, Math.floor(amount))
               : undefined;
-          await playerActionOnChain(
-            wallet,
+          
+          // Store pending action and start simulation
+          setPendingAction({ action: action as string, amount: normalizedAmount });
+          playerActionSim.performAction(
             tableId,
-            action as "fold" | "check" | "call" | "bet" | "raise" | "allin",
+            action as string,
             normalizedAmount
           );
-          await syncOnChainState();
         } catch (e) {
           setError(e instanceof Error ? e.message : "Bet action failed");
         } finally {
@@ -419,5 +436,9 @@ export function usePokerActions(config: PokerActionsConfig) {
     handleReveal,
     handleShowdown,
     handleAction,
+    // Transaction simulation states
+    joinSimulation: joinTableSim,
+    actionSimulation: playerActionSim,
+    pendingAction,
   };
 }

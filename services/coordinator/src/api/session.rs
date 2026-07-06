@@ -307,11 +307,32 @@ pub(crate) fn validate_reveal_phase(phase: &str) -> Result<(), StatusCode> {
     }
 }
 
+/// Whether dynamic MPC node discovery is active: it is used only when neither
+/// the on-chain committee registry nor static `MPC_NODE_*` endpoints are
+/// configured. This preserves backward compatibility — explicit static config
+/// always takes precedence over runtime self-registration.
+pub(crate) fn dynamic_discovery_active(state: &AppState) -> bool {
+    state.soroban_config.committee_registry_contract.is_empty()
+        && !state.mpc_config.static_endpoints_configured
+}
+
 /// Select 3 healthy MPC nodes, prioritizing those in the requested region.
 pub(crate) async fn select_mpc_nodes(
     state: &AppState,
     requested_region: Option<String>,
 ) -> Result<Vec<String>, StatusCode> {
+    // Dynamic discovery: choose from nodes that self-registered at runtime and
+    // are still heartbeating. The registry enforces the 3-healthy-node minimum
+    // (returning None -> 503) just like the registry/static paths below.
+    if dynamic_discovery_active(state) {
+        return state
+            .node_registry
+            .read()
+            .await
+            .select_session_nodes()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
     let all_nodes = if state.soroban_config.committee_registry_contract.is_empty() {
         // Fallback to static config if registry not configured
         state

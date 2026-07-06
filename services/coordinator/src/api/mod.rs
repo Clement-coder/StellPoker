@@ -2,6 +2,7 @@
 
 pub mod admin;
 mod admin_extended;
+pub mod api_key_admin;
 mod auth;
 pub mod flags;
 mod parsing;
@@ -13,7 +14,7 @@ pub use admin_extended::*;
 pub use types::*;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -26,9 +27,9 @@ use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
 };
 use session::{
-    ensure_session_exists, fetch_onchain_table_view, is_identity_missing_error,
-    next_proof_session_id, resolve_deal_players_from_lobby, select_mpc_nodes, validate_players,
-    validate_reveal_phase, validate_table_id,
+    dynamic_discovery_active, ensure_session_exists, fetch_onchain_table_view,
+    is_identity_missing_error, next_proof_session_id, resolve_deal_players_from_lobby,
+    select_mpc_nodes, validate_players, validate_reveal_phase, validate_table_id,
 };
 
 const MAX_PLAYERS: usize = 6;
@@ -1034,6 +1035,84 @@ pub async fn committee_status(State(state): State<AppState>) -> Json<CommitteeSt
     })
 }
 
+/// POST /api/node/register
+///
+/// Self-registration (and implicit heartbeat) for an MPC node. Only available
+/// when dynamic discovery is active (no committee registry and no static
+/// `MPC_NODE_*` endpoints); otherwise returns `409 Conflict`.
+pub async fn register_node(
+    State(state): State<AppState>,
+    Json(req): Json<RegisterNodeRequest>,
+) -> Result<Json<NodeRegistryResponse>, StatusCode> {
+    if !dynamic_discovery_active(&state) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let id = req.id.trim();
+    let endpoint = req.endpoint.trim();
+    if id.is_empty() || !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    let mut registry = state.node_registry.write().await;
+    let created = registry.register(id.to_string(), endpoint.to_string());
+    tracing::info!(
+        "MPC node '{}' {} ({})",
+        id,
+        if created { "registered" } else { "refreshed" },
+        endpoint
+    );
+    Ok(Json(NodeRegistryResponse {
+        id: id.to_string(),
+        registered: registry.len(),
+        healthy: registry.healthy_endpoints().len(),
+    }))
+}
+
+/// POST /api/node/{id}/heartbeat
+///
+/// Keep an existing registration alive. Returns `404` if the node is unknown
+/// (the node should re-register), or `409` when dynamic discovery is inactive.
+pub async fn node_heartbeat(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<NodeRegistryResponse>, StatusCode> {
+    if !dynamic_discovery_active(&state) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let mut registry = state.node_registry.write().await;
+    if !registry.heartbeat(&id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(Json(NodeRegistryResponse {
+        id,
+        registered: registry.len(),
+        healthy: registry.healthy_endpoints().len(),
+    }))
+}
+
+/// DELETE /api/node/{id}
+///
+/// Graceful deregistration (e.g. on node shutdown). Returns `404` if unknown,
+/// or `409` when dynamic discovery is inactive.
+pub async fn deregister_node(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<NodeRegistryResponse>, StatusCode> {
+    if !dynamic_discovery_active(&state) {
+        return Err(StatusCode::CONFLICT);
+    }
+    let mut registry = state.node_registry.write().await;
+    if !registry.deregister(&id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    tracing::info!("MPC node '{}' deregistered", id);
+    Ok(Json(NodeRegistryResponse {
+        id,
+        registered: registry.len(),
+        healthy: registry.healthy_endpoints().len(),
+    }))
+}
+
 /// POST /api/session/:session_id/cancel
 ///
 /// Deprecated admin endpoint for manual MPC session cancellation.
@@ -1293,5 +1372,117 @@ pub async fn get_mpc_session_status(
         "cancel_reason": session.cancel_reason,
         "elapsed_secs": session.started_at.elapsed().as_secs(),
     })))
+}
+
+/// GET /api/admin/archives
+///
+/// Query archived sessions by ID, table ID, or time range.
+/// Requires operator or higher.
+pub async fn admin_list_archives(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ArchiveQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth = admin::validate_admin_request(
+        &state,
+        &headers,
+        "admin_list_archives",
+        &state.admin_state,
+    )
+    .await?;
+    admin::require_role(&auth, admin::AdminRole::Operator)?;
+
+    let from_ts = query
+        .from_timestamp
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let to_ts = query
+        .to_timestamp
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let limit = query.limit.unwrap_or(50).min(200);
+    let offset = query.offset.unwrap_or(0);
+
+    let archives = crate::archiver::query_archives(
+        &state.archive_store,
+        query.session_id.as_deref(),
+        query.table_id,
+        from_ts,
+        to_ts,
+        limit,
+        offset,
+    )
+    .await;
+
+    Ok(Json(serde_json::json!({
+        "archives": archives,
+        "count": archives.len(),
+        "limit": limit,
+        "offset": offset,
+    })))
+}
+
+/// GET /api/admin/archives/:archive_id
+///
+/// Retrieve a single archived session by archive ID.
+/// Requires operator or higher.
+pub async fn admin_get_archive(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(archive_id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth = admin::validate_admin_request(
+        &state,
+        &headers,
+        "admin_get_archive",
+        &state.admin_state,
+    )
+    .await?;
+    admin::require_role(&auth, admin::AdminRole::Operator)?;
+
+    match crate::archiver::restore_archived_session(&state.archive_store, &archive_id).await {
+        Some(archived) => Ok(Json(serde_json::json!(archived))),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// POST /api/admin/archives/purge
+///
+/// Manually trigger purge of archives that exceed the purge TTL.
+/// Requires operator or higher.
+pub async fn admin_purge_archives(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let auth = admin::validate_admin_request(
+        &state,
+        &headers,
+        "admin_purge_archives",
+        &state.admin_state,
+    )
+    .await?;
+    admin::require_role(&auth, admin::AdminRole::Operator)?;
+
+    let purged = crate::archiver::purge_old_archives(&state.archive_store, &state.archive_config).await;
+
+    Ok(Json(serde_json::json!({
+        "purged": purged,
+        "action_by": auth.address,
+        "role": auth.role.as_str(),
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ArchiveQuery {
+    pub session_id: Option<String>,
+    pub table_id: Option<u32>,
+    pub from_timestamp: Option<String>,
+    pub to_timestamp: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 

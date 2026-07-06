@@ -163,8 +163,8 @@ export function PlayerSeat({
       <div className="flex gap-1">
         {player.cards ? (
           <>
-            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} />
-            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} />
+            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} flip={isUser} />
+            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} flip={isUser} flipDelay={0.08} />
           </>
         ) : (
           <>

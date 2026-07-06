@@ -75,6 +75,23 @@ pub struct CommitteeStatusResponse {
     pub status: String,
 }
 
+#[derive(Deserialize)]
+pub struct RegisterNodeRequest {
+    /// Stable node identifier (e.g. "0", "1", "2").
+    pub id: String,
+    /// Base URL the coordinator should use to reach the node.
+    pub endpoint: String,
+}
+
+#[derive(Serialize)]
+pub struct NodeRegistryResponse {
+    pub id: String,
+    /// Total registered nodes after the operation.
+    pub registered: usize,
+    /// Number currently considered healthy.
+    pub healthy: usize,
+}
+
 #[derive(Serialize)]
 pub struct ChainConfigResponse {
     pub rpc_url: String,

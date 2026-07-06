@@ -9,6 +9,12 @@ export default defineConfig({
   workers: 1,
   reporter: [["html", { outputFolder: "playwright-report" }], ["list"]],
   timeout: 30000,
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.02,
+      threshold: 0.2,
+    },
+  },
   use: {
     baseURL: BASE_URL,
     trace: "on-first-retry",

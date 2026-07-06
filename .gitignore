@@ -22,3 +22,9 @@ crs/
 **/.tmp*
 *.tmp
 .aider*
+
+# Playwright test artifacts
+app/playwright-report/
+app/test-results/
+app/e2e/tests/screenshot-snapshots/__diff_output__/
+**/__screenshots__/__diff_output__/

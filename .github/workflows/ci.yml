@@ -57,6 +57,20 @@ jobs:
           key: ${{ runner.os }}-nargo-1.0.0-beta.17
           restore-keys: ${{ runner.os }}-nargo-
 
+      - name: Cache compiled circuit artifacts
+        uses: actions/cache@v4
+        with:
+          # Compiled ACIR per circuit. Keyed on the nargo version + a hash of
+          # every circuit source so any change busts the cache. No restore-keys
+          # on purpose: a partial match would restore artifacts built from
+          # different sources, which compile-circuits.sh (mtime-based) would
+          # then wrongly treat as up to date and skip. Exact match only.
+          path: |
+            circuits/deal_valid/target
+            circuits/reveal_board_valid/target
+            circuits/showdown_valid/target
+          key: ${{ runner.os }}-circuits-1.0.0-beta.17-${{ hashFiles('circuits/**/src/**/*.nr', 'circuits/**/Nargo.toml') }}
+
       - name: Compile all Noir circuits
         run: ./scripts/compile-circuits.sh
 
@@ -129,6 +143,49 @@ jobs:
       - name: Stop stack
         if: always()
         run: docker compose down --remove-orphans
+
+  visual-regression:
+    name: Visual regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: cd app && npm ci
+
+      - name: Install Playwright browsers
+        run: cd app && npx playwright install --with-deps chromium
+
+      - name: Build
+        run: cd app && npm run build
+        env:
+          NEXT_PUBLIC_COORDINATOR_URL: http://localhost:8080
+
+      - name: Run screenshot tests (update snapshots on push to main)
+        if: github.event_name == 'push'
+        run: cd app && npx playwright test --config=e2e/playwright.config.ts --project=chromium --update-snapshots tests/visual-regression.spec.ts
+        env:
+          CI: true
+
+      - name: Run screenshot tests (compare on PR)
+        if: github.event_name == 'pull_request'
+        run: cd app && npx playwright test --config=e2e/playwright.config.ts --project=chromium tests/visual-regression.spec.ts
+        env:
+          CI: true
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-visual
+          path: app/playwright-report/
 
   frontend:
     name: Next.js frontend

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { Card } from "./Card";
 import { PotChipPile } from "./PixelChip";
 
@@ -8,7 +9,19 @@ interface BoardProps {
   pot: number;
 }
 
+/** Stagger between consecutive cards flipping in, in seconds. */
+const FLIP_STAGGER = 0.1;
+
 export function Board({ cards, pot }: BoardProps) {
+  // Track how many cards were already on the board so that only the
+  // newly-revealed cards (flop, then turn, then river) animate, and they
+  // stagger starting from zero rather than from their absolute index.
+  const revealedCountRef = useRef(0);
+  const firstNewIndex = revealedCountRef.current;
+  useEffect(() => {
+    revealedCountRef.current = cards.length;
+  }, [cards.length]);
+
   return (
     <div className="flex flex-col items-center gap-3">
       {/* Pot display */}
@@ -26,9 +39,13 @@ export function Board({ cards, pot }: BoardProps) {
       {/* Community cards */}
       <div className="flex gap-2 items-center">
         {cards.map((card, i) => (
-          <div key={i} className="animate-card-deal" style={{ animationDelay: `${i * 0.1}s` }}>
-            <Card value={card} size="md" />
-          </div>
+          <Card
+            key={i}
+            value={card}
+            size="md"
+            flip
+            flipDelay={Math.max(0, i - firstNewIndex) * FLIP_STAGGER}
+          />
         ))}
         {/* Empty slots */}
         {Array.from({ length: 5 - cards.length }).map((_, i) => (

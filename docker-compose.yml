@@ -15,10 +15,14 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      # CMD-SHELL so a failure echoes a greppable WARN line into the health
+      # log (docker inspect --format '{{json .State.Health}}').
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000 || (echo 'WARN: soroban health check failed' >&2; exit 1)"]
       interval: 5s
       timeout: 3s
       retries: 30
+      # Stellar quickstart takes a while to bring up Horizon + RPC.
+      start_period: 30s
     <<: *json-logging
 
   # MPC Node 0
@@ -42,11 +46,13 @@ services:
       - ./circuits:/app/circuits:ro
       - ./services/node/config:/app/config:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8101/health || (echo 'WARN: mpc-node-0 health check failed' >&2; exit 1)"]
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 10s
+      # co-noir key generation + CRS load can take 30-60s on a cold start;
+      # failures during this window do not count against `retries`.
+      start_period: 60s
     <<: *json-logging
 
   # MPC Node 1
@@ -70,11 +76,13 @@ services:
       - ./circuits:/app/circuits:ro
       - ./services/node/config:/app/config:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8102/health || (echo 'WARN: mpc-node-1 health check failed' >&2; exit 1)"]
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 10s
+      # co-noir key generation + CRS load can take 30-60s on a cold start;
+      # failures during this window do not count against `retries`.
+      start_period: 60s
     <<: *json-logging
 
   # MPC Node 2
@@ -98,11 +106,13 @@ services:
       - ./circuits:/app/circuits:ro
       - ./services/node/config:/app/config:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8103/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8103/health || (echo 'WARN: mpc-node-2 health check failed' >&2; exit 1)"]
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 10s
+      # co-noir key generation + CRS load can take 30-60s on a cold start;
+      # failures during this window do not count against `retries`.
+      start_period: 60s
     <<: *json-logging
 
   # Coordinator (orchestrates MPC + serves API to web app)
@@ -137,11 +147,11 @@ services:
       mpc-node-2:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/health || (echo 'WARN: coordinator health check failed' >&2; exit 1)"]
       interval: 5s
       timeout: 3s
       retries: 30
-      start_period: 10s
+      start_period: 20s
     <<: *json-logging
 
   # Web app
