@@ -23,6 +23,7 @@ import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
+import { ThemeSelector } from "./ThemeSelector";
 import { usePokerActions } from "@/lib/use-poker-actions";
 import { getDealerLine } from "@/lib/dealer-lines";
 import { subscribePokerTableEvents } from "@/lib/events";
@@ -824,6 +825,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             >
               KEYS [?]
             </button>
+            <ThemeSelector />
           </div>
 
           <div className="flex items-center gap-3">
@@ -972,6 +974,8 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     alias={getAlias(player.address) ?? undefined}
                     hideChipStats={false}
                     activeEmote={seatEmotes[player.seat]}
+                    boardCards={game.boardCards}
+                    gamePhase={game.phase}
                   />
                 ))}
 
@@ -1022,6 +1026,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   currentBet={displayCurrentBet}
                   myBet={displayMyBet}
                   myStack={displayMyStack}
+                  pot={displayPot}
                   onAction={handleAction}
                   onChainConfirmed={game.onChainConfirmed}
                   canStartHand={canStartHand}
@@ -1057,6 +1062,8 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   }}
                   hideChipStats={false}
                   activeEmote={seatEmotes[userPlayer.seat]}
+                  boardCards={game.boardCards}
+                  gamePhase={game.phase}
                 />
               ) : (
                 <div className="flex flex-col items-center gap-2" style={{ opacity: 0.25 }}>
