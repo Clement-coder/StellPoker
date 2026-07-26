@@ -122,6 +122,8 @@ pub fn process_action(
     emit_action(env, table, player, action, table.pot - pot_before);
 
     table.last_action_ledger = env.ledger().sequence();
+    // Reset action deadline for the next player
+    table.action_deadline = env.ledger().sequence() + table.config.timeout_ledgers;
 
     // Advance turn
     advance_turn(env, table)
@@ -246,6 +248,8 @@ fn advance_to_next_phase(env: &Env, table: &mut TableState) -> Result<(), PokerT
         _ => return Ok(()),
     };
     table.last_action_ledger = env.ledger().sequence();
+    // No action deadline during committee phases (Dealing/Reveal/Showdown)
+    table.action_deadline = 0;
 
     env.events().publish(
         (Symbol::new(env, "phase_change"), table.id),

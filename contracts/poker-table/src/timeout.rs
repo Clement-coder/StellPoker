@@ -88,6 +88,105 @@ pub fn process_timeout(
     Ok(())
 }
 
+/// Force-fold a stalling player after the action deadline has passed.
+///
+/// Any seated player (except the one whose turn it is) may call this once
+/// the on-chain `action_deadline` ledger has been reached. The target player
+/// is folded, the turn advances, and the deadline is reset for the new
+/// active player.
+pub fn force_fold(
+    env: &Env,
+    table: &mut TableState,
+    caller: &Address,
+    target_seat: u32,
+) -> Result<(), PokerTableError> {
+    let current_ledger = env.ledger().sequence();
+
+    // Must be in a betting phase
+    if !matches!(
+        table.phase,
+        GamePhase::Preflop | GamePhase::Flop | GamePhase::Turn | GamePhase::River
+    ) {
+        return Err(PokerTableError::ForceFoldNotAvailable);
+    }
+
+    // Deadline must have passed
+    if table.action_deadline == 0 || current_ledger < table.action_deadline {
+        return Err(PokerTableError::TimeoutNotReached);
+    }
+
+    // The target must be the current player to act
+    if target_seat != table.current_turn {
+        return Err(PokerTableError::TargetNotActive);
+    }
+
+    // Verify caller is a seated player (not the target)
+    let caller_seat = find_seat_by_address(env, table, caller)?;
+    if caller_seat == target_seat {
+        return Err(PokerTableError::NotYourTurn);
+    }
+
+    // Target must be active (not folded, not all-in)
+    let mut target = table
+        .players
+        .get(target_seat)
+        .ok_or(PokerTableError::InvalidPlayerIndex)?;
+    if target.folded || target.all_in {
+        return Err(PokerTableError::TargetNotActive);
+    }
+
+    // Force fold the target
+    target.folded = true;
+    table.players.set(target_seat, target.clone());
+
+    env.events().publish(
+        (Symbol::new(env, "force_fold"), table.id),
+        (target.address.clone(), caller.clone()),
+    );
+
+    // Check if only one player remains
+    if game::active_player_count(table) == 1 {
+        game::settle_fold_win(env, table)?;
+    } else {
+        // Advance to next player
+        let num_players = table.players.len() as u32;
+        let mut next = (target_seat + 1) % num_players;
+        for _ in 0..num_players {
+            let np = table
+                .players
+                .get(next)
+                .ok_or(PokerTableError::InvalidPlayerIndex)?;
+            if !np.folded && !np.all_in {
+                break;
+            }
+            next = (next + 1) % num_players;
+        }
+        table.current_turn = next;
+        table.last_action_ledger = current_ledger;
+        table.action_deadline = current_ledger + table.config.timeout_ledgers;
+    }
+
+    Ok(())
+}
+
+/// Find the seat index of a player by their address.
+fn find_seat_by_address(
+    _env: &Env,
+    table: &TableState,
+    address: &Address,
+) -> Result<u32, PokerTableError> {
+    for i in 0..table.players.len() {
+        let p = table
+            .players
+            .get(i)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        if crate::constant_time::address_eq(_env, &p.address, address) {
+            return Ok(p.seat_index);
+        }
+    }
+    Err(PokerTableError::PlayerNotAtTable)
+}
+
 /// Emergency refund: return all player stacks + pot split equally
 /// among non-folded players. Used when committee fails.
 fn emergency_refund(_env: &Env, table: &mut TableState) -> Result<(), PokerTableError> {

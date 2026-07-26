@@ -64,6 +64,8 @@ pub enum PokerTableError {
     InvalidPlayerCount = 37,
     CannotChangeMinPlayersMidHand = 38,
     ContractPaused = 39,
+    ForceFoldNotAvailable = 40,
+    TargetNotActive = 41,
 }
 
 #[contracttype]
@@ -139,6 +141,9 @@ pub struct TableState {
     pub session_id: u32, // Game hub session ID for current hand
     /// Accumulated rake collected from settled hands, withdrawable by `admin`.
     pub rake_balance: i128,
+    /// Ledger sequence by which the current player must act. Any other seated
+    /// player may call `force_fold` after this deadline is reached.
+    pub action_deadline: u32,
 }
 
 #[contracttype]
