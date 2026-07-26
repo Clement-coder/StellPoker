@@ -5,6 +5,8 @@ import { PixelCat, opponentSprite } from "./PixelCat";
 import { PixelChip } from "./PixelChip";
 import { Identicon } from "./Identicon";
 import type { Player } from "@/lib/game-state";
+import { classifyHandStrength } from "@/lib/hand-strength";
+import type { HandStrength } from "@/lib/hand-strength";
 
 interface PlayerSeatProps {
   player: Player;
@@ -20,6 +22,10 @@ interface PlayerSeatProps {
   onEditAlias?: () => void;
   hideChipStats?: boolean;
   activeEmote?: string | null;
+  /** Board cards needed for hand strength evaluation. */
+  boardCards?: number[];
+  /** Current game phase to determine when to show hand strength. */
+  gamePhase?: string;
 }
 
 export function PlayerSeat({
@@ -34,6 +40,8 @@ export function PlayerSeat({
   onEditAlias,
   hideChipStats = false,
   activeEmote = null,
+  boardCards = [],
+  gamePhase = "",
 }: PlayerSeatProps) {
   const sprite = isUser ? 18 : opponentSprite(player.seat);
   const cardSize = isUser ? "md" : "sm";
@@ -44,6 +52,11 @@ export function PlayerSeat({
       : `${player.address.slice(0, 4)}...${player.address.slice(-4)}`;
   const displayLabel =
     labelOverride ?? (alias ? (isUser ? `${alias} (YOU)` : alias) : fallbackLabel);
+
+  const showStrength = isUser && player.cards && boardCards.length >= 3 && ["flop", "turn", "river"].includes(gamePhase);
+  const handStrength: HandStrength | null = showStrength
+    ? classifyHandStrength(player.cards!, boardCards)
+    : null;
 
   return (
     <div
@@ -163,8 +176,8 @@ export function PlayerSeat({
       <div className="flex gap-1">
         {player.cards ? (
           <>
-            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} flip={isUser} />
-            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} flip={isUser} flipDelay={0.08} />
+            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} flip={isUser} strength={handStrength} />
+            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} flip={isUser} flipDelay={0.08} strength={handStrength} />
           </>
         ) : (
           <>
