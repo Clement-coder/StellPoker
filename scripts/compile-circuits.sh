@@ -47,6 +47,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 EXPECTED_NOIR_VERSION="${EXPECTED_NOIR_VERSION:-1.0.0-beta.17}"
+
+# Issue #92: Download CRS with optimization
+if [ ! -f "${PROJECT_DIR}/.crs/bn254_g1.dat" ]; then
+    echo "Downloading CRS (cached for future compilations)..."
+    "${SCRIPT_DIR}/download-crs.sh"
+fi
 EXPECTED_NOIR_TAG="v${EXPECTED_NOIR_VERSION}"
 TOOLS_DIR="${PROJECT_DIR}/.tmp_tools"
 CIRCUITS=(deal_valid reveal_board_valid showdown_valid)
@@ -201,3 +207,34 @@ main() {
 }
 
 main "$@"
+
+# Issue #92: CRS download optimization
+download_crs_if_needed() {
+    local crs_dir="${PROJECT_DIR}/.tmp_crs"
+    local crs_file="${crs_dir}/bn254_g1.dat"
+    local crs_version_file="${crs_dir}/version.txt"
+    local expected_version="v1.0.0"
+    
+    mkdir -p "$crs_dir"
+    
+    if [ -f "$crs_version_file" ]; then
+        local current_version=$(cat "$crs_version_file")
+        if [ "$current_version" = "$expected_version" ] && [ -f "$crs_file" ]; then
+            echo "CRS already downloaded ($expected_version)"
+            return 0
+        fi
+    fi
+    
+    echo "Downloading CRS ($expected_version)..."
+    local crs_url="https://aztec-ignition.s3.amazonaws.com/MAIN%20IGNITION/sealed/bn254_g1.dat"
+    
+    curl -L --progress-bar -o "$crs_file" "$crs_url" || {
+        echo "CRS download failed" >&2
+        return 1
+    }
+    
+    echo "$expected_version" > "$crs_version_file"
+    echo "CRS downloaded successfully"
+}
+
+download_crs_if_needed

@@ -39,6 +39,7 @@ mod limits;
 mod private_table;
 mod session;
 mod tls;
+mod heartbeat;
 
 use limits::ResourceLimits;
 use private_table::PrivateTableState;

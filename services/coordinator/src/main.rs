@@ -55,6 +55,7 @@ mod leader_election;
 mod mpc;
 mod mpc_auth_middleware;
 mod mpc_benchmark;
+mod mpc_heartbeat;
 mod node_reliability;
 mod plugin;
 mod proof_cache;
@@ -64,8 +65,10 @@ mod request_log;
 mod session_cache;
 mod session_gc;
 mod session_migration;
+mod session_migration;
 mod soroban;
 mod stats;
+mod tls_client;
 
 use api::admin::{AdminConfig, AdminState};
 
@@ -359,12 +362,12 @@ async fn main() {
         tracing_subscriber::fmt().init();
     }
 
-    let enc_key = crypto::EncryptionKey::from_env()
-        .unwrap_or_else(|_| crypto::EncryptionKey::ephemeral());
+    let enc_key =
+        crypto::EncryptionKey::from_env().unwrap_or_else(|_| crypto::EncryptionKey::ephemeral());
     let enc_key = Arc::new(enc_key);
 
-    let committee_secret_plaintext = std::env::var("COMMITTEE_SECRET")
-        .unwrap_or_else(|_| "test_secret".to_string());
+    let committee_secret_plaintext =
+        std::env::var("COMMITTEE_SECRET").unwrap_or_else(|_| "test_secret".to_string());
     let committee_secret = crypto::EncryptedField::encrypt(&enc_key, &committee_secret_plaintext)
         .expect("failed to encrypt committee_secret");
 
@@ -797,7 +800,10 @@ async fn main() {
         )
         .route("/api/admin/stats", get(api::admin_stats))
         .route("/api/admin/config/reload", post(api::admin_reload_config))
-        .route("/api/admin/maintenance", post(api::admin_toggle_maintenance))
+        .route(
+            "/api/admin/maintenance",
+            post(api::admin_toggle_maintenance),
+        )
         // New admin endpoints for issues #267, #261, #264, #265
         .route("/api/admin/rate-limits", get(api::admin_list_rate_limits))
         .route("/api/admin/rate-limits", post(api::admin_upsert_rate_limit))
@@ -830,18 +836,12 @@ async fn main() {
             post(api::admin_cancel_migration),
         )
         // Session archiving endpoints (Issue #259)
-        .route(
-            "/api/admin/archives",
-            get(api::admin_list_archives),
-        )
+        .route("/api/admin/archives", get(api::admin_list_archives))
         .route(
             "/api/admin/archives/:archive_id",
             get(api::admin_get_archive),
         )
-        .route(
-            "/api/admin/archives/purge",
-            post(api::admin_purge_archives),
-        )
+        .route("/api/admin/archives/purge", post(api::admin_purge_archives))
         .layer(axum::middleware::from_fn_with_state(
             state.idempotency_store.clone(),
             idempotency::idempotency_middleware,
