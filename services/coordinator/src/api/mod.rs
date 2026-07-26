@@ -36,6 +36,18 @@ use session::{
 const MAX_PLAYERS: usize = 6;
 const MIN_PLAYERS: usize = 2;
 
+/// Derive the parameterised circuit name for a given base circuit and player
+/// count.  Returns e.g. `"deal_valid_2p"` for 2 players, falling back to the
+/// unparameterised `"deal_valid"` when the count equals MAX_PLAYERS or the
+/// parameterised variant is not expected to exist.
+fn parameterised_circuit_name(base: &str, player_count: usize) -> String {
+    if player_count >= MIN_PLAYERS && player_count < MAX_PLAYERS {
+        format!("{}_{}p", base, player_count)
+    } else {
+        base.to_string()
+    }
+}
+
 pub struct SessionGuard {
     counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -438,12 +450,13 @@ pub async fn request_deal(
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_deal.share_set_ids,
         &proof_session_id,
-        &req.circuit_name,
+        &deal_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
@@ -771,12 +784,14 @@ pub async fn request_showdown(
 
     let proof_session_id = next_proof_session_id(session, "showdown");
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let showdown_circuit =
+        parameterised_circuit_name("showdown_valid", session.player_order.len());
     let showdown_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_showdown.share_set_ids,
         &proof_session_id,
-        "showdown_valid",
+        &showdown_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
