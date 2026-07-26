@@ -70,6 +70,9 @@ terraform plan
 terraform apply
 ```
 
+For a production-shaped staging deployment, start from
+`terraform/environments/staging.aws.tfvars.example` and keep `environment = "staging"`.
+
 ### Deploy to GCP
 
 ```bash

@@ -3,11 +3,11 @@ name: Benchmark Regression Detection
 on:
   pull_request:
     paths:
-      - '**/src/**'
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
-      - '**/scripts/**'
-      - '**/benchmark_data/**'
+      - "**/src/**"
+      - "**/Cargo.toml"
+      - "**/Cargo.lock"
+      - "**/scripts/**"
+      - "**/benchmark_data/**"
 
 jobs:
   benchmark:
@@ -21,9 +21,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: actions/setup-rust@v2
-        with:
-          rust-version: stable
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install dependencies
         run: |
@@ -35,8 +33,6 @@ jobs:
         env:
           CURRENT_RESULTS: ${{ runner.temp }}/bench_results.json
         run: |
-          # Example benchmark command – replace with your actual command.
-          # The command should output JSON with the required keys.
           cargo bench --quiet --manifest-path contracts/committee-registry/Cargo.toml \
             -- --output-format=json > ${{ env.CURRENT_RESULTS }}
 
@@ -55,8 +51,13 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const comment = JSON.parse(fs.readFileSync(process.env.COMMENT_PAYLOAD, 'utf8'));
-            github.rest.issues.createComment({
+            const commentPath = '${{ runner.temp }}/comment.json';
+            if (!fs.existsSync(commentPath)) {
+              core.warning('No comment payload written – regression script may have failed before producing one.');
+              return;
+            }
+            const comment = JSON.parse(fs.readFileSync(commentPath, 'utf8'));
+            await github.rest.issues.createComment({
               ...context.repo,
               issue_number: context.issue.number,
               body: comment.body

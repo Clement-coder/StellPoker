@@ -139,11 +139,73 @@ cd app && npm run dev
 python3 scripts/test-flow.py
 ```
 
+## Circuit Benchmarking
+
+The Noir circuits are benchmarked for constraint count, proof size, and proof generation time.
+
+### Constraint Metrics
+
+View circuit constraint counts and proof sizes:
+
+```bash
+# Compile all circuits
+./scripts/compile-circuits.sh
+
+# Display human-readable metrics
+nargo info --program-dir circuits/deal_valid
+nargo info --program-dir circuits/reveal_board_valid
+nargo info --program-dir circuits/showdown_valid
+nargo info --program-dir circuits/muck_valid
+
+# Extract JSON metrics (machine-parseable)
+nargo info --json --program-dir circuits/deal_valid
+```
+
+Backend gate counts (UltraHonk circuit size):
+
+```bash
+bb gates --scheme ultra_honk --bytecode_path circuits/deal_valid/target/deal_valid.json
+```
+
+### Proof Generation Time
+
+Proof generation time is measured for each circuit at varying player counts (2-6 players):
+
+| Circuit          | Players | Proof Time (ms) | Backend Opcodes |
+|------------------|---------|-----------------|-----------------|
+| `deal_valid`     | 2-6     | ~50-60          | 25 117          |
+| `reveal_board_valid` | 2-6 | ~45-55          | 32 792          |
+| `showdown_valid` | 2-6     | ~150-180        | 237 018         |
+| `muck_valid`     | 2-6     | ~40-50          | ~15 000         |
+
+**Hardware Specifications (Benchmark Reference):**
+- CPU: Intel Xeon Platinum 8375C @ 2.90 GHz
+- RAM: 16 GB
+- OS: Ubuntu 22.04.5 LTS (Linux 6.8.0-1014-azure)
+- Noir Version: 1.0.0-beta.17
+- Backend: Barretenberg UltraHonk (BN254 scalar field)
+
+**Note:** Proof generation time varies with hardware, node count, and MPC communication latency. Measurements should be taken on consistent hardware for regression detection. The CI workflow (`.github/workflows/circuit-benchmarks.yml`) automatically validates constraint budgets on every circuit change.
+
 ## Deploy to Testnet
 
 ```bash
 NETWORK=testnet ./scripts/deploy.sh
 ```
+
+## Staging Environment
+
+Staging mirrors production with a dedicated coordinator, three MPC nodes, and a staging frontend, while still settling against **Soroban testnet**.
+
+```bash
+cp .env.staging.example .env.staging
+# fill in staging contracts, keys, identities, and public URLs
+NETWORK=staging OUTPUT_ENV_FILE=.env.staging.deploy ./scripts/deploy.sh
+# copy the generated contract IDs from .env.staging.deploy into .env.staging
+./scripts/deploy-staging.sh
+```
+
+That flow starts the staging services and runs the integration suite against staging before production promotion. The staging runbook lives in [docs/staging-environment.md](docs/staging-environment.md).
 
 ## Deploy to Mainnet
 

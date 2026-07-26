@@ -1,0 +1,84 @@
+name: Unsafe Code Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unsafe-audit:
+    name: Rust unsafe code audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-unsafe-audit-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-unsafe-audit-cargo-
+
+      - name: List all unsafe blocks in workspace
+        id: list_unsafe
+        run: |
+          echo "### Unsafe code blocks found in workspace" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -rn --include='*.rs' 'unsafe' . \
+            --exclude-dir=target \
+            --exclude-dir=vendor \
+            --exclude-dir='.cargo-home' \
+            | tee unsafe_report.txt >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          COUNT=$(grep -c 'unsafe' unsafe_report.txt || true)
+          echo "unsafe_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Total unsafe occurrences: $COUNT" >> $GITHUB_STEP_SUMMARY
+
+      - name: Require SAFETY comment for every unsafe block
+        run: |
+          # Every `unsafe {` or `unsafe fn` must be preceded (within 5 lines)
+          # by a // SAFETY: comment. This script flags any that are missing.
+          python3 - <<'PYEOF'
+          import sys, re
+          from pathlib import Path
+
+          UNSAFE_RE = re.compile(r'\bunsafe\s*(\{|fn\s|impl\s|trait\s)')
+          SAFETY_RE = re.compile(r'//\s*SAFETY:')
+
+          violations = []
+          skip_dirs = {'target', 'vendor', '.cargo-home', '.git'}
+
+          for path in Path('.').rglob('*.rs'):
+              if any(part in skip_dirs for part in path.parts):
+                  continue
+              lines = path.read_text(errors='replace').splitlines()
+              for i, line in enumerate(lines):
+                  if UNSAFE_RE.search(line):
+                      # Look back up to 5 lines for a SAFETY comment
+                      window_start = max(0, i - 5)
+                      window = lines[window_start:i + 1]
+                      if not any(SAFETY_RE.search(l) for l in window):
+                          violations.append(f'{path}:{i+1}: unsafe without SAFETY comment')
+
+          if violations:
+              print('ERROR: unsafe block(s) missing // SAFETY: justification:')
+              for v in violations:
+                  print(f'  {v}')
+              sys.exit(1)
+          else:
+              print('OK: all unsafe blocks have a // SAFETY: comment.')
+          PYEOF
+
+      - name: Upload unsafe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsafe-report
+          path: unsafe_report.txt

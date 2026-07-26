@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Board } from "./Board";
 import { Card } from "./Card";
 import { PlayerSeat } from "./PlayerSeat";
@@ -17,13 +18,17 @@ import {
   getActiveAddress,
   type WalletSession,
 } from "@/lib/wallet";
+import { useWalletMonitor } from "@/lib/use-wallet-monitor";
 import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { TransactionSimulation } from "./TransactionSimulation";
+import { MpcNodeIndicator } from "./MpcNodeIndicator";
+import { ThemeSelector } from "./ThemeSelector";
 import { usePokerActions } from "@/lib/use-poker-actions";
 import { getDealerLine } from "@/lib/dealer-lines";
 import { subscribePokerTableEvents } from "@/lib/events";
 import { getAlias, setAlias } from "@/lib/alias-store";
+import { stellarExpertUrl } from "@/lib/explorer";
 import {
   loadHandHistory,
   saveHandHistoryEntry,
@@ -91,6 +96,7 @@ function mapOnChainPhase(phase: string): GamePhase | null {
 }
 
 export function Table({ tableId, initialPlayMode }: TableProps) {
+  const router = useRouter();
   const [game, setGame] = useState<GameState>(() => createInitialState(tableId));
   const [wallet, setWallet] = useState<WalletSession | null>(null);
   const [playMode, setPlayMode] = useState<PlayMode>(initialPlayMode ?? "headsup");
@@ -299,27 +305,38 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
     void syncOnChainState();
 
     // Event-driven refresh: subscribe to the poker table contract's events and
-    // re-sync immediately whenever a state transition is emitted. A slower
-    // interval remains as a safety net in case an event is missed.
-    let unsubscribe: (() => void) | undefined;
+    // re-sync immediately whenever a state transition is emitted.
+    let unsubscribeChainEvents: (() => void) | undefined;
     void subscribePokerTableEvents(() => {
       void syncOnChainState();
     })
       .then((sub) => {
-        unsubscribe = sub.stop;
+        unsubscribeChainEvents = sub.stop;
       })
       .catch(() => {
         // Event subscription unavailable — fall back to interval polling only.
       });
 
+    // Coordinator WebSocket push (Issue #105): the coordinator notifies us
+    // the instant a deal/reveal/showdown/player action lands, so we don't
+    // have to wait on the slower interval below. `subscribeGameState`
+    // returns null on browsers without WebSocket support, in which case the
+    // interval poll is the only refresh mechanism.
+    const gameStateSocket = api.subscribeGameState(tableId, () => {
+      void syncOnChainState();
+    });
+
+    // Safety net in case a chain event or WebSocket push is missed or the
+    // browser has no WebSocket support at all.
     const interval = setInterval(() => {
       void syncOnChainState();
     }, 8000);
     return () => {
       clearInterval(interval);
-      unsubscribe?.();
+      unsubscribeChainEvents?.();
+      gameStateSocket?.stop();
     };
-  }, [syncOnChainState]);
+  }, [syncOnChainState, tableId]);
 
   // Infer sensible default play mode from table capacity when no explicit mode was provided.
   useEffect(() => {
@@ -408,6 +425,16 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
       clearInterval(timerId);
     };
   }, [wallet]);
+
+  // Auto-logout when wallet disconnects (#322).
+  useWalletMonitor({
+    wallet,
+    onDisconnect: () => {
+      setWallet(null);
+      setGame(createInitialState(tableId));
+      router.push("/");
+    },
+  });
 
   // Elapsed timer while loading
   useEffect(() => {
@@ -643,9 +670,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
     const connect = () => {
       if (!active) return;
-      const base = api.COORDINATOR_API_BASE;
-      const wsBase = base.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
-      const wsUrl = `${wsBase}/api/table/${tableId}/chat/ws`;
+      const wsUrl = `${api.coordinatorWsBase()}/api/table/${tableId}/chat/ws`;
 
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
@@ -800,18 +825,20 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             >
               KEYS [?]
             </button>
+            <ThemeSelector />
           </div>
 
           <div className="flex items-center gap-3">
             <div className="text-[9px]" style={{ color: "#c8e6ff" }}>
               HAND #{game.handNumber} | {game.phase.toUpperCase()}
             </div>
+            <MpcNodeIndicator tableId={tableId} phase={game.phase} />
 
             {(() => {
               const explorerUrl = game.lastTxHash
-                ? `https://stellar.expert/explorer/testnet/tx/${game.lastTxHash}`
+                ? stellarExpertUrl("tx", game.lastTxHash)
                 : wallet
-                  ? `https://stellar.expert/explorer/testnet/account/${wallet.address}`
+                  ? stellarExpertUrl("account", wallet.address)
                   : null;
               if (!explorerUrl) return null;
               return (
@@ -947,6 +974,8 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     alias={getAlias(player.address) ?? undefined}
                     hideChipStats={false}
                     activeEmote={seatEmotes[player.seat]}
+                    boardCards={game.boardCards}
+                    gamePhase={game.phase}
                   />
                 ))}
 
@@ -997,6 +1026,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   currentBet={displayCurrentBet}
                   myBet={displayMyBet}
                   myStack={displayMyStack}
+                  pot={displayPot}
                   onAction={handleAction}
                   onChainConfirmed={game.onChainConfirmed}
                   canStartHand={canStartHand}
@@ -1032,6 +1062,8 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   }}
                   hideChipStats={false}
                   activeEmote={seatEmotes[userPlayer.seat]}
+                  boardCards={game.boardCards}
+                  gamePhase={game.phase}
                 />
               ) : (
                 <div className="flex flex-col items-center gap-2" style={{ opacity: 0.25 }}>
@@ -1074,7 +1106,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               <span className="text-[8px]" style={{ color: "#7f8c8d" }}>
                 TX:{" "}
                 <a
-                  href={`https://stellar.expert/explorer/testnet/tx/${game.lastTxHash}`}
+                  href={stellarExpertUrl("tx", game.lastTxHash)}
                   target="_blank"
                   rel="noopener noreferrer"
                   style={{ color: "#ffc078", textShadow: "1px 1px 0 rgba(0,0,0,0.5)" }}
@@ -1292,16 +1324,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           simulation={joinSimulation.simulation}
           loading={joinSimulation.loading}
           onConfirm={() => {
-            // The join table simulation will be handled by the hook
-            // but we need to provide the table ID and buy-in parameters
-            const tableState = game.tableState?.parsed;
-            if (tableState && typeof tableState === "object" && "config" in tableState) {
-              const config = tableState.config as { min_buy_in?: unknown };
-              const buyIn = typeof config.min_buy_in === "bigint" 
-                ? config.min_buy_in 
-                : BigInt("1000000000");
-              joinSimulation.confirmJoin(tableId, buyIn);
-            }
+            joinSimulation.confirmJoin();
           }}
           onCancel={() => {
             joinSimulation.cancelSimulation();

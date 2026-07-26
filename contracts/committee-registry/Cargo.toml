@@ -11,3 +11,8 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+criterion = "0.5"
+
+[[bench]]
+name = "bench_main"
+harness = false

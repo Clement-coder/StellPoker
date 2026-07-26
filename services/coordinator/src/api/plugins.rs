@@ -4,10 +4,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::SystemTime;
 
-use crate::plugin::PluginLoader;
 use crate::AppState;
 
 #[derive(Serialize)]

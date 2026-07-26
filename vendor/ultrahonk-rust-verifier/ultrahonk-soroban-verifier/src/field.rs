@@ -31,7 +31,7 @@ impl Fr {
 
     /// Construct from hex string (with or without 0x prefix).
     /// Normalize to even digits before `hex::decode` so OddLength exception won't occur.
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_hex(s: &str) -> Self {
         let bytes = hex::decode(normalize_hex(s)).expect("hex decode failed");
         let mut padded = [0u8; 32];
         let offset = 32 - bytes.len();

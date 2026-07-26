@@ -3,4 +3,3 @@ pub mod sandbox;
 pub mod types;
 
 pub use loader::PluginLoader;
-pub use types::*;

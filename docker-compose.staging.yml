@@ -1,0 +1,128 @@
+services:
+  mpc-node-0:
+    image: ${STAGING_MPC_NODE_IMAGE:-stellpoker/mpc-node:staging}
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "0"
+      PORT: "8101"
+      MPC_PORT: "10000"
+      PARTY_CONFIG: "/app/config/party_0.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+    ports:
+      - "${STAGING_NODE0_PORT:-8101}:8101"
+      - "10000:10000"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  mpc-node-1:
+    image: ${STAGING_MPC_NODE_IMAGE:-stellpoker/mpc-node:staging}
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "1"
+      PORT: "8102"
+      MPC_PORT: "10001"
+      PARTY_CONFIG: "/app/config/party_1.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+    ports:
+      - "${STAGING_NODE1_PORT:-8102}:8102"
+      - "10001:10001"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  mpc-node-2:
+    image: ${STAGING_MPC_NODE_IMAGE:-stellpoker/mpc-node:staging}
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "2"
+      PORT: "8103"
+      MPC_PORT: "10002"
+      PARTY_CONFIG: "/app/config/party_2.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+    ports:
+      - "${STAGING_NODE2_PORT:-8103}:8103"
+      - "10002:10002"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8103/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  coordinator:
+    image: ${STAGING_COORDINATOR_IMAGE:-stellpoker/coordinator:staging}
+    build:
+      context: .
+      dockerfile: services/coordinator/Dockerfile
+    env_file:
+      - ${STAGING_ENV_FILE:-.env.staging}
+    environment:
+      MPC_NODE_0: "http://mpc-node-0:8101"
+      MPC_NODE_1: "http://mpc-node-1:8102"
+      MPC_NODE_2: "http://mpc-node-2:8103"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+      BIND_ADDR: "0.0.0.0:8080"
+    ports:
+      - "${STAGING_COORDINATOR_PORT:-8080}:8080"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+    depends_on:
+      mpc-node-0:
+        condition: service_healthy
+      mpc-node-1:
+        condition: service_healthy
+      mpc-node-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    image: ${STAGING_FRONTEND_IMAGE:-stellpoker/frontend:staging}
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_COORDINATOR_URL: ${NEXT_PUBLIC_COORDINATOR_URL:-http://localhost:8080}
+        NEXT_PUBLIC_STELLAR_EXPERT_BASE_URL: ${NEXT_PUBLIC_STELLAR_EXPERT_BASE_URL:-https://stellar.expert/explorer/testnet}
+    environment:
+      NEXT_PUBLIC_COORDINATOR_URL: ${NEXT_PUBLIC_COORDINATOR_URL:-http://localhost:8080}
+      NEXT_PUBLIC_STELLAR_EXPERT_BASE_URL: ${NEXT_PUBLIC_STELLAR_EXPERT_BASE_URL:-https://stellar.expert/explorer/testnet}
+    ports:
+      - "${STAGING_FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      coordinator:
+        condition: service_healthy

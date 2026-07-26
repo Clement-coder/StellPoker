@@ -15,32 +15,61 @@ import time
 import requests
 from nacl.signing import SigningKey
 
-BASE = "http://localhost:8080"
+DEFAULT_ENV_FILE = os.environ.get(
+    "TEST_ENV_FILE",
+    os.path.join(os.path.dirname(__file__), "..", ".env.local"),
+)
 
-# --- Load on-chain config from .env.local ---
-ENV_FILE = os.path.join(os.path.dirname(__file__), "..", ".env.local")
 env_vars = {}
-if os.path.exists(ENV_FILE):
-    with open(ENV_FILE) as f:
+if os.path.exists(DEFAULT_ENV_FILE):
+    with open(DEFAULT_ENV_FILE) as f:
         for line in f:
             line = line.strip()
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 env_vars[k] = v.strip('"')
 
+BASE = os.environ.get(
+    "COORDINATOR_URL",
+    env_vars.get("NEXT_PUBLIC_COORDINATOR_URL", "http://localhost:8080"),
+).rstrip("/")
+SOROBAN_RPC = os.environ.get(
+    "SOROBAN_RPC",
+    env_vars.get("SOROBAN_RPC", "http://localhost:8000/soroban/rpc"),
+)
+NETWORK_PASSPHRASE = os.environ.get(
+    "NETWORK_PASSPHRASE",
+    env_vars.get("NETWORK_PASSPHRASE", "Standalone Network ; February 2017"),
+)
+COMMITTEE_IDENTITY = os.environ.get(
+    "COMMITTEE_IDENTITY",
+    env_vars.get("COMMITTEE_IDENTITY", "committee-local"),
+)
 POKER_TABLE_CONTRACT = env_vars.get("POKER_TABLE_CONTRACT", "")
 PLAYER1_ADDRESS = env_vars.get("PLAYER1_ADDRESS", "")
 PLAYER2_ADDRESS = env_vars.get("PLAYER2_ADDRESS", "")
+PLAYER1_IDENTITY = os.environ.get(
+    "PLAYER1_IDENTITY",
+    env_vars.get("PLAYER1_IDENTITY", "player1-local"),
+)
+PLAYER2_IDENTITY = os.environ.get(
+    "PLAYER2_IDENTITY",
+    env_vars.get("PLAYER2_IDENTITY", "player2-local"),
+)
 TABLE_ID = int(env_vars.get("TABLE_ID", os.environ.get("TABLE_ID", "0")))
 ON_CHAIN = bool(POKER_TABLE_CONTRACT)
+
+print(f"Using env file: {DEFAULT_ENV_FILE}")
+print(f"Coordinator URL: {BASE}")
 
 if ON_CHAIN:
     print(f"On-chain mode: contract={POKER_TABLE_CONTRACT}")
     print(f"  Table ID: {TABLE_ID}")
+    print(f"  Soroban RPC: {SOROBAN_RPC}")
     print(f"  Player 1: {PLAYER1_ADDRESS}")
     print(f"  Player 2: {PLAYER2_ADDRESS}")
 else:
-    print("Off-chain mode (no POKER_TABLE_CONTRACT in .env.local)")
+    print("Off-chain mode (no POKER_TABLE_CONTRACT configured)")
 
 # --- Stellar key helpers ---
 
@@ -91,8 +120,8 @@ def stellar_player_action(player_identity: str, table_id: int, player_address: s
         "stellar", "contract", "invoke",
         "--id", POKER_TABLE_CONTRACT,
         "--source", player_identity,
-        "--rpc-url", "http://localhost:8000/soroban/rpc",
-        "--network-passphrase", "Standalone Network ; February 2017",
+        "--rpc-url", SOROBAN_RPC,
+        "--network-passphrase", NETWORK_PASSPHRASE,
         "--",
         "player_action",
         "--table_id", str(table_id),
@@ -121,9 +150,9 @@ def get_on_chain_table():
     cmd = [
         "stellar", "contract", "invoke",
         "--id", POKER_TABLE_CONTRACT,
-        "--source", "committee-local",
-        "--rpc-url", "http://localhost:8000/soroban/rpc",
-        "--network-passphrase", "Standalone Network ; February 2017",
+        "--source", COMMITTEE_IDENTITY,
+        "--rpc-url", SOROBAN_RPC,
+        "--network-passphrase", NETWORK_PASSPHRASE,
         "--send=no",
         "--",
         "get_table",
@@ -162,9 +191,9 @@ def ensure_on_chain_ready_for_deal():
         cmd = [
             "stellar", "contract", "invoke",
             "--id", POKER_TABLE_CONTRACT,
-            "--source", "committee-local",
-            "--rpc-url", "http://localhost:8000/soroban/rpc",
-            "--network-passphrase", "Standalone Network ; February 2017",
+            "--source", COMMITTEE_IDENTITY,
+            "--rpc-url", SOROBAN_RPC,
+            "--network-passphrase", NETWORK_PASSPHRASE,
             "--",
             "start_hand",
             "--table_id", str(TABLE_ID),
@@ -190,12 +219,12 @@ def do_preflop_betting():
         print(f"  ERROR: expected Preflop phase, got {phase}")
         exit(1)
     # Seat 0 (player1 = SB) calls to match BB
-    if not stellar_player_action("player1-local", TABLE_ID, PLAYER1_ADDRESS, '"Call"'):
+    if not stellar_player_action(PLAYER1_IDENTITY, TABLE_ID, PLAYER1_ADDRESS, '"Call"'):
         exit(1)
     phase = get_on_chain_phase()
     # In heads-up with current contract logic, this may already advance the phase.
     if phase == "Preflop":
-        if not stellar_player_action("player2-local", TABLE_ID, PLAYER2_ADDRESS, '"Check"'):
+        if not stellar_player_action(PLAYER2_IDENTITY, TABLE_ID, PLAYER2_ADDRESS, '"Check"'):
             exit(1)
         phase = get_on_chain_phase()
     phase = get_on_chain_phase()
@@ -211,11 +240,11 @@ def do_postflop_betting(round_name: str):
         print(f"  ERROR: expected {expected} phase, got {phase}")
         exit(1)
     # Post-flop: seat (dealer+1)%2 = 0 acts first
-    if not stellar_player_action("player1-local", TABLE_ID, PLAYER1_ADDRESS, '"Check"'):
+    if not stellar_player_action(PLAYER1_IDENTITY, TABLE_ID, PLAYER1_ADDRESS, '"Check"'):
         exit(1)
     phase = get_on_chain_phase()
     if phase == expected:
-        if not stellar_player_action("player2-local", TABLE_ID, PLAYER2_ADDRESS, '"Check"'):
+        if not stellar_player_action(PLAYER2_IDENTITY, TABLE_ID, PLAYER2_ADDRESS, '"Check"'):
             exit(1)
         phase = get_on_chain_phase()
     phase = get_on_chain_phase()

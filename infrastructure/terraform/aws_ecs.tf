@@ -100,21 +100,25 @@ resource "aws_iam_role_policy" "ecs_task_logs" {
 
 # Application Load Balancer
 resource "aws_lb" "main" {
-  count           = var.enable_alb ? 1 : 0
-  name            = "${var.project_name}-alb"
-  internal        = false
+  count               = var.enable_alb ? 1 : 0
+  name                = "${var.project_name}-alb"
+  internal            = false
   load_balancer_type = "application"
-  security_groups = [data.aws_security_group.alb.id]
-  subnets         = data.aws_subnets.public.ids
+  security_groups     = [data.aws_security_group.alb.id]
+  subnets             = data.aws_subnets.public.ids
 
   enable_deletion_protection = var.environment == "prod"
   enable_http2              = true
   enable_cross_zone_load_balancing = true
 
+  # Access logs are emitted to the ALB-owned logging bucket (if configured by account)
+  # or you can add an explicit S3 bucket in a separate change.
+
   tags = {
     Name = "${var.project_name}-alb"
   }
 }
+
 
 data "aws_security_group" "alb" {
   name   = "${var.project_name}-alb-sg"
@@ -163,12 +167,46 @@ resource "aws_lb_target_group" "coordinator" {
   }
 }
 
-# ALB Listener
-resource "aws_lb_listener" "coordinator" {
-  count           = var.enable_alb ? 1 : 0
+# ALB Listeners (public gateway)
+# HTTP (port 80) forwards only when no TLS is configured; otherwise redirect to HTTPS.
+resource "aws_lb_listener" "coordinator_http" {
+  count             = var.enable_alb ? 1 : 0
   load_balancer_arn = aws_lb.main[0].arn
-  port            = "80"
-  protocol        = "HTTP"
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = var.acm_certificate_arn != "" ? "redirect" : "forward"
+
+    # If TLS is configured, redirect HTTP->HTTPS.
+    dynamic "redirect" {
+      for_each = var.acm_certificate_arn != "" ? [1] : []
+      content {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+
+    # If TLS is not configured, forward HTTP directly.
+    dynamic "forward" {
+      for_each = var.acm_certificate_arn == "" ? [1] : []
+      content {
+        target_group_arn = aws_lb_target_group.coordinator[0].arn
+      }
+    }
+  }
+}
+
+
+# HTTPS (port 443) with TLS termination.
+resource "aws_lb_listener" "coordinator_https" {
+  count             = var.enable_alb && var.acm_certificate_arn != "" ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   = var.acm_certificate_arn
 
   default_action {
     type             = "forward"
@@ -176,8 +214,10 @@ resource "aws_lb_listener" "coordinator" {
   }
 }
 
+
 # ECS Task Definition for Coordinator
 resource "aws_ecs_task_definition" "coordinator" {
+
   family                   = "${var.project_name}-coordinator"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
@@ -246,6 +286,7 @@ resource "aws_ecs_service" "coordinator" {
   desired_count   = var.coordinator_desired_count
   launch_type     = "FARGATE"
 
+
   network_configuration {
     subnets          = data.aws_subnets.private.ids
     security_groups  = [data.aws_security_group.ecs_tasks.id]
@@ -259,9 +300,10 @@ resource "aws_ecs_service" "coordinator" {
   }
 
   depends_on = [
-    aws_lb_listener.coordinator,
-    aws_iam_role_policy.ecs_task_logs
+    aws_lb_listener.coordinator_http,
+    aws_iam_role_policy.ecs_task_logs,
   ]
+
 
   tags = {
     Name = "${var.project_name}-coordinator-service"
@@ -327,6 +369,7 @@ output "alb_dns_name" {
   description = "ALB DNS name"
   value       = var.enable_alb ? aws_lb.main[0].dns_name : ""
 }
+
 
 output "coordinator_service_id" {
   description = "Coordinator service ID"

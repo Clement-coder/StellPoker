@@ -92,6 +92,7 @@ export function useJoinTableSimulation(
   onSuccess?: () => void
 ) {
   const simulation = useTransactionSimulation();
+  const [params, setParams] = useState<{ tableId: number; buyIn: bigint } | null>(null);
 
   const simulateJoinTable = async (tableId: number, buyIn: bigint) => {
     if (!wallet) throw new Error("Wallet not connected");
@@ -109,11 +110,17 @@ export function useJoinTableSimulation(
   };
 
   const joinTable = (tableId: number, buyIn: bigint) => {
+    setParams({ tableId, buyIn });
     simulation.startSimulation(() => simulateJoinTable(tableId, buyIn));
   };
 
-  const confirmJoin = (tableId: number, buyIn: bigint) => {
-    simulation.executeTransaction(() => executeJoinTable(tableId, buyIn));
+  const confirmJoin = (tableId?: number, buyIn?: bigint) => {
+    const tId = tableId ?? params?.tableId;
+    const bIn = buyIn ?? params?.buyIn;
+    if (tId === undefined || bIn === undefined) {
+      throw new Error("No active simulation or parameters to confirm");
+    }
+    simulation.executeTransaction(() => executeJoinTable(tId, bIn));
   };
 
   return {

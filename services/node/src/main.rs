@@ -1,3 +1,5 @@
+mod crypto;
+
 //! Stellar Poker MPC Node
 //!
 //! Each node is a participant in the REP3 MPC protocol via TACEO's co-noir.
@@ -11,6 +13,18 @@
 //! 5. Coordinator polls GET /session/:id/status and retrieves proof via GET /session/:id/proof
 //!
 //! co-noir handles peer-to-peer MPC communication internally via TCP (ports 10000-10002).
+//!
+//! ## TLS and coordinator certificate pinning
+//!
+//! When TLS environment variables are set (`TLS_SERVER_CERT_PATH` / `TLS_SERVER_KEY_PATH`
+//! or the `_B64` variants), the node serves HTTPS instead of plain HTTP.
+//!
+//! Optionally, the coordinator's identity can be pinned via:
+//! - `COORDINATOR_TLS_PIN_PUBKEY_HASH` – SHA-256 hex of the coordinator's SPKI
+//! - `COORDINATOR_TLS_PIN_CERT_PATH` / `COORDINATOR_TLS_PIN_CERT_B64` – full cert pin
+//!
+//! When a pin is set, the node demands mutual TLS (mTLS) and rejects any
+//! connection whose client certificate does not match the pin.
 
 use axum::{
     routing::{get, post},
@@ -24,6 +38,8 @@ mod api;
 mod limits;
 mod private_table;
 mod session;
+mod tls;
+mod heartbeat;
 
 use limits::ResourceLimits;
 use private_table::PrivateTableState;
@@ -89,6 +105,15 @@ async fn main() {
         limits.max_session_wall_seconds,
     );
 
+    // ── TLS configuration ────────────────────────────────────────────────────
+    let tls_cfg = match tls::load_from_env() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!("TLS configuration error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
     let state = NodeState {
         node_id,
         sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -124,6 +149,106 @@ async fn main() {
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    match tls_cfg {
+        // ── Plain HTTP (no TLS env vars set) ─────────────────────────────────
+        None => {
+            tracing::info!("Listening on {} (plain HTTP)", addr);
+            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            axum::serve(listener, app).await.unwrap();
+        }
+
+        // ── TLS / mTLS ────────────────────────────────────────────────────────
+        Some(cfg) => {
+            let pin_mode = if cfg.pinned_spki_hash.is_some() {
+                "mTLS with SPKI hash pin"
+            } else if cfg.pinned_cert_der.is_some() {
+                "mTLS with full cert pin"
+            } else {
+                "TLS (no coordinator pin)"
+            };
+            tracing::info!("Listening on {} ({}) ", addr, pin_mode);
+
+            let server_config = match tls::build_server_config(cfg) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("Failed to build TLS server config: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let acceptor = tokio_rustls::TlsAcceptor::from(server_config);
+
+            let tcp_listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            serve_tls(tcp_listener, acceptor, app).await;
+        }
+    }
+}
+
+/// Accept TLS connections in a loop and hand them to hyper-util for HTTP serving.
+///
+/// Each accepted TLS stream is served in its own `tokio::spawn`'d task so that
+/// a slow or stalled client does not block other connections.
+async fn serve_tls(
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    app: Router,
+) {
+    use hyper_util::{
+        rt::{TokioExecutor, TokioIo},
+        server::conn::auto::Builder,
+    };
+    use tower::Service as _;
+
+    loop {
+        let (tcp_stream, remote_addr) = match listener.accept().await {
+            Ok(pair) => pair,
+            Err(e) => {
+                tracing::warn!("TCP accept error: {}", e);
+                continue;
+            }
+        };
+
+        let acceptor = acceptor.clone();
+        // Clone the Axum Router (it is cheap — backed by Arc).
+        let mut svc = app.clone();
+
+        tokio::spawn(async move {
+            let tls_stream = match acceptor.accept(tcp_stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    // TLS handshake failures are expected when misconfigured
+                    // clients connect; log at debug level to avoid noise.
+                    tracing::debug!(
+                        "TLS handshake failed from {}: {}",
+                        remote_addr,
+                        e
+                    );
+                    return;
+                }
+            };
+            tracing::debug!("TLS connection accepted from {}", remote_addr);
+            let io = TokioIo::new(tls_stream);
+
+            // Poll the service so it is ready before handing it to hyper.
+            if let Err(e) = std::future::poll_fn(|cx| svc.poll_ready(cx)).await {
+                tracing::warn!(
+                    "Axum service not ready for {}: {}",
+                    remote_addr,
+                    e
+                );
+                return;
+            }
+
+            if let Err(e) = Builder::new(TokioExecutor::new())
+                .serve_connection(io, svc)
+                .await
+            {
+                tracing::debug!(
+                    "HTTP/TLS connection error from {}: {}",
+                    remote_addr,
+                    e
+                );
+            }
+        });
+    }
 }

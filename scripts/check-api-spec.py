@@ -31,6 +31,7 @@ Exit codes
 import os
 import sys
 import pathlib
+import subprocess
 
 SPEC_PATH = pathlib.Path(__file__).parent.parent / "docs" / "openapi.yaml"
 COORDINATOR_URL = os.environ.get("COORDINATOR_URL", "")
@@ -119,14 +120,59 @@ def run_schemathesis_offline() -> bool:
         )
         return True  # non-blocking in offline mode
 
-    try:
-        schema = schemathesis.from_path(str(SPEC_PATH))
-        count = sum(1 for _ in schema.get_all_operations())
-        print(f"[OK] schemathesis loaded spec: {count} operations found.")
+    loader_candidates = [
+        ("schemathesis.from_path", getattr(schemathesis, "from_path", None)),
+        (
+            "schemathesis.openapi.from_path",
+            getattr(getattr(schemathesis, "openapi", None), "from_path", None),
+        ),
+        (
+            "schemathesis.openapi.from_file",
+            getattr(getattr(schemathesis, "openapi", None), "from_file", None),
+        ),
+    ]
+
+    loader_errors = []
+    for loader_name, loader in loader_candidates:
+        if not callable(loader):
+            continue
+        try:
+            if loader_name.endswith("from_file"):
+                with open(SPEC_PATH, "rb") as fd:
+                    schema = loader(fd)
+            else:
+                schema = loader(str(SPEC_PATH))
+
+            count = None
+            if hasattr(schema, "get_all_operations"):
+                count = sum(1 for _ in schema.get_all_operations())
+            elif hasattr(schema, "get_all_endpoints"):
+                count = sum(1 for _ in schema.get_all_endpoints())
+            elif hasattr(schema, "__iter__"):
+                count = sum(1 for _ in schema)
+
+            if count is None:
+                print(f"[OK] schemathesis loaded spec via {loader_name}.")
+            else:
+                print(f"[OK] schemathesis loaded spec via {loader_name}: {count} operations found.")
+            return True
+        except Exception as exc:
+            loader_errors.append(f"{loader_name}: {exc}")
+
+    # Fall back to the CLI if the Python API shape changed again. The CLI is
+    # generally more stable across releases than the import surface.
+    cli_cmd = [sys.executable, "-m", "schemathesis", "run", str(SPEC_PATH), "--dry-run"]
+    result = subprocess.run(cli_cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("[OK] schemathesis loaded spec via CLI dry-run.")
         return True
-    except Exception as exc:
-        print(f"[FAIL] schemathesis could not load spec: {exc}", file=sys.stderr)
-        return False
+
+    details = "; ".join(loader_errors) if loader_errors else "no compatible schemathesis loader found"
+    cli_output = (result.stderr or result.stdout).strip()
+    if cli_output:
+        details = f"{details}; CLI dry-run: {cli_output}"
+    print(f"[FAIL] schemathesis could not load spec: {details}", file=sys.stderr)
+    return False
 
 
 def run_schemathesis_live() -> bool:
@@ -134,8 +180,6 @@ def run_schemathesis_live() -> bool:
     Run a real schemathesis CLI conformance test against a live coordinator.
     Uses subprocess so the output streams directly to stdout/stderr.
     """
-    import subprocess
-
     checks = ",".join([
         "not_a_server_error",
         "response_schema_conformance",

@@ -17,6 +17,7 @@ import {
   type WalletSession,
   type WalletType,
 } from "@/lib/wallet";
+import { useWalletMonitor } from "@/lib/use-wallet-monitor";
 
 type Screen = "splash" | "connect" | "menu" | "create" | "join";
 const STROOPS_PER_XLM = BigInt("10000000");
@@ -92,6 +93,16 @@ export default function Home() {
       setScreen("menu");
     }
   }, [screen, wallet]);
+
+  // Auto-logout when wallet disconnects (#322).
+  useWalletMonitor({
+    wallet,
+    onDisconnect: () => {
+      setWallet(null);
+      setScreen("connect");
+      setError("Wallet disconnected. Please reconnect to continue.");
+    },
+  });
 
   const handleConnect = async (type: WalletType) => {
     setConnecting(type);

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# stellpoker — CLI for common Stellar Poker development workflows
+#
+# Usage:
+#   stellpoker <command> [options]
+#
+# Commands:
+#   init      Set up the development environment
+#   deploy    Build and deploy contracts  (NETWORK=testnet|mainnet)
+#   start     Start all local services via Docker Compose
+#   test      Run all tests (Rust + Noir + integration)
+#   bench     Run Noir circuit benchmarks
+#   logs      Tail service logs  (service name optional)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+  grep '^#' "$0" | grep -v '#!/' | sed 's/^# \{0,\}//'
+  exit 1
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  init)
+    exec "${SCRIPT_DIR}/scripts/setup.sh" "$@"
+    ;;
+
+  deploy)
+    exec "${SCRIPT_DIR}/scripts/deploy.sh" "$@"
+    ;;
+
+  start)
+    if [[ "${1:-}" == "--local" ]]; then
+      exec "${SCRIPT_DIR}/scripts/start-local.sh"
+    else
+      exec docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up "$@"
+    fi
+    ;;
+
+  test)
+    echo "=== Running Rust tests ==="
+    cargo test --manifest-path "${SCRIPT_DIR}/Cargo.toml" "$@"
+
+    echo ""
+    echo "=== Running Noir library tests ==="
+    (cd "${SCRIPT_DIR}/circuits/lib" && nargo test)
+
+    echo ""
+    echo "=== Running integration tests ==="
+    python3 "${SCRIPT_DIR}/scripts/test-flow.py"
+    ;;
+
+  bench)
+    echo "=== Noir circuit benchmarks ==="
+    for circuit in deal_valid reveal_board_valid showdown_valid; do
+      echo ""
+      echo "--- $circuit ---"
+      (cd "${SCRIPT_DIR}/circuits/${circuit}" && nargo info)
+    done
+    ;;
+
+  logs)
+    service="${1:-}"
+    exec docker compose -f "${SCRIPT_DIR}/docker-compose.yml" logs --follow --tail=100 $service
+    ;;
+
+  *)
+    usage
+    ;;
+esac

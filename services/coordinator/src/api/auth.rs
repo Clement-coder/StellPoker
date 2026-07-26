@@ -6,6 +6,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
 
+/// Derive a stable, non-reversible token from an IP address using SHA-256
+/// keyed with the active key version. This keeps raw IPs out of in-memory
+/// rate-limit buckets while remaining deterministic for the same IP+key.
+fn hash_ip(ip: &str, enc_key: &crate::crypto::EncryptionKey) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"stellar-poker-ip-hash-v1:");
+    hasher.update(enc_key.active_version().to_le_bytes());
+    hasher.update(ip.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
 const AUTH_SKEW_SECS: i64 = 300;
 const RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const RATE_LIMIT_MAX_REQUESTS: usize = 60;
@@ -23,7 +34,10 @@ pub(crate) async fn enforce_rate_limit(
 ) -> Result<(), StatusCode> {
     let now = now_unix_secs_u64()?;
     let ip = extract_ip(headers);
-    let bucket_key = format!("{}:{}:{}", ip, table_id, action);
+    // Hash the IP with the encryption key as HMAC salt so raw IPs are never
+    // stored in memory; the hash is stable across calls for the same IP.
+    let ip_hash = hash_ip(&ip, &state.enc_key);
+    let bucket_key = format!("{}:{}:{}", ip_hash, table_id, action);
 
     let mut rl = state.rate_limit_state.write().await;
     let bucket = rl.requests_by_bucket.entry(bucket_key).or_default();

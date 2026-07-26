@@ -1,5 +1,6 @@
 use soroban_sdk::{Env, Vec};
 
+use crate::constant_time;
 use crate::types::*;
 
 /// Maximum allowed rake, in basis points (5%). Enforced at table creation.
@@ -117,7 +118,7 @@ fn distinct_all_in_levels(env: &Env, table: &TableState) -> Result<Vec<i128>, Po
 fn insert_sorted_unique(levels: &mut Vec<i128>, value: i128) {
     for j in 0..levels.len() {
         let existing = levels.get(j).unwrap_or(0);
-        if value == existing {
+        if constant_time::i128_eq(value, existing) {
             return; // already present
         }
         if value < existing {
@@ -333,7 +334,11 @@ fn eligible_tied_winners(env: &Env, tied: &Vec<u32>, eligible: &Vec<u32>) -> Vec
     for ei in 0..eligible.len() {
         if let Some(seat) = eligible.get(ei) {
             for ti in 0..tied.len() {
-                if tied.get(ti) == Some(seat) {
+                if tied
+                    .get(ti)
+                    .map(|candidate| constant_time::u32_eq(candidate, seat))
+                    .unwrap_or(false)
+                {
                     recipients.push_back(seat);
                     break;
                 }
@@ -364,7 +369,11 @@ fn best_eligible_winner(ranked: &Vec<u32>, eligible: &Vec<u32>) -> Option<u32> {
     for ri in 0..ranked.len() {
         let seat = ranked.get(ri)?;
         for ei in 0..eligible.len() {
-            if eligible.get(ei) == Some(seat) {
+            if eligible
+                .get(ei)
+                .map(|candidate| constant_time::u32_eq(candidate, seat))
+                .unwrap_or(false)
+            {
                 return Some(seat);
             }
         }
@@ -377,7 +386,7 @@ fn best_eligible_winner(ranked: &Vec<u32>, eligible: &Vec<u32>) -> Option<u32> {
 fn accumulate_payout(payouts: &mut Vec<(u32, i128)>, seat: u32, amount: i128) {
     for i in 0..payouts.len() {
         if let Some((s, existing)) = payouts.get(i) {
-            if s == seat {
+            if constant_time::u32_eq(s, seat) {
                 payouts.set(i, (seat, existing + amount));
                 return;
             }

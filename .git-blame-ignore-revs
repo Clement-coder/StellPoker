@@ -1,0 +1,10 @@
+# .git-blame-ignore-revs
+#
+# Commits listed here were purely formatting or refactoring changes with no
+# semantic modifications. git blame will skip them when this file is configured.
+#
+# Configure locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# See CONTRIBUTING.md for details.
+

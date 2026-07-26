@@ -1,5 +1,6 @@
 use soroban_sdk::{Env, Symbol, Vec};
 
+use crate::constant_time;
 use crate::game_hub;
 use crate::pot;
 use crate::types::*;
@@ -44,6 +45,7 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     // Transition to dealing phase (committee will shuffle + deal)
     table.phase = GamePhase::Dealing;
     table.last_action_ledger = env.ledger().sequence();
+    table.action_deadline = 0; // No action deadline during Dealing phase
     Ok(())
 }
 
@@ -127,7 +129,7 @@ pub fn settle_showdown(
     table.last_action_ledger = env.ledger().sequence();
 
     // Notify game hub: player1_won = true if the proved winner is seat 0.
-    let player1_won = winner_seat == 0;
+    let player1_won = constant_time::u32_eq(winner_seat, 0);
     game_hub::notify_end(env, &table.config.game_hub, table.session_id, player1_won);
 
     let winner = table
@@ -163,7 +165,8 @@ fn build_tied_winners(
             continue;
         }
         let seat = p.seat_index;
-        let tied = seat == winner_seat || (tie_mask & (1u32 << seat)) != 0;
+        let tied = constant_time::u32_eq(seat, winner_seat)
+            || constant_time::u32_ne(tie_mask & (1u32 << seat), 0);
         if tied {
             winners.push_back(seat);
         }
@@ -192,7 +195,7 @@ fn build_winner_ranking(
             .players
             .get(i)
             .ok_or(PokerTableError::InvalidPlayerIndex)?;
-        if p.folded || p.seat_index == winner_seat {
+        if p.folded || constant_time::u32_eq(p.seat_index, winner_seat) {
             continue;
         }
         ranking.push_back(p.seat_index);
@@ -218,7 +221,7 @@ pub fn settle_fold_win(env: &Env, table: &mut TableState) -> Result<(), PokerTab
         table.last_action_ledger = env.ledger().sequence();
 
         // Notify game hub
-        let player1_won = winner_seat == 0;
+        let player1_won = constant_time::u32_eq(winner_seat, 0);
         game_hub::notify_end(env, &table.config.game_hub, table.session_id, player1_won);
 
         env.events().publish(

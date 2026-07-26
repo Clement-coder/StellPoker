@@ -6,3 +6,11 @@ compiler_version = ">=0.36.0"
 
 [dependencies]
 stellar_poker_lib = { path = "../lib" }
+
+[package.metadata.circuit]
+description = "Derive same shared deck, verify deck root, select next unused board card indices in ascending order, reveal plaintext card values."
+constraint_count = 32792
+proof_size_bytes = 16256
+public_inputs_bytes = 800
+poseidon2_permutations = 64
+max_players = 6

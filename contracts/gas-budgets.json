@@ -1,0 +1,43 @@
+{
+  "_comment": "Approved CPU-instruction baselines for poker-table contract functions. Updated by running `cargo test -p poker-table gas_report -- --nocapture`. A >5% increase over any baseline fails CI (enforced in gas_regression_test.rs).",
+  "_updated": "2026-06-27",
+  "_max_regression_pct": 5,
+  "functions": {
+    "create_table": {
+      "cpu_insns": 6000000,
+      "notes": "Creates a new table entry in persistent storage. Cost scales with TableConfig size."
+    },
+    "join_table": {
+      "cpu_insns": 6000000,
+      "notes": "Reads table, appends player, writes back. Includes token transfer."
+    },
+    "start_hand": {
+      "cpu_insns": 8000000,
+      "notes": "Rotates dealer, posts blinds, transitions to Dealing phase."
+    },
+    "commit_deal": {
+      "cpu_insns": 8000000,
+      "notes": "Stores hand commitments + deck root. ZK proof verification is mocked in tests."
+    },
+    "player_action": {
+      "cpu_insns": 8000000,
+      "notes": "Highest variance: Fold can trigger Settlement + pot distribution. Budget covers worst case."
+    },
+    "reveal_board": {
+      "cpu_insns": 8000000,
+      "notes": "Appends board cards, resets betting round. Called 3x per hand (flop/turn/river)."
+    },
+    "leave_table": {
+      "cpu_insns": 6000000,
+      "notes": "Removes player, transfers token balance back. Only allowed in Waiting/Settlement."
+    },
+    "claim_timeout": {
+      "cpu_insns": 8000000,
+      "notes": "Checks ledger sequence, auto-folds stalling player. May trigger Settlement."
+    },
+    "withdraw_rake": {
+      "cpu_insns": 6000000,
+      "notes": "Transfers accumulated rake to admin. No-op if rake_balance == 0."
+    }
+  }
+}

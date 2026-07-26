@@ -18,10 +18,11 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, TableSession};
+use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -34,6 +35,18 @@ use session::{
 
 const MAX_PLAYERS: usize = 6;
 const MIN_PLAYERS: usize = 2;
+
+/// Derive the parameterised circuit name for a given base circuit and player
+/// count.  Returns e.g. `"deal_valid_2p"` for 2 players, falling back to the
+/// unparameterised `"deal_valid"` when the count equals MAX_PLAYERS or the
+/// parameterised variant is not expected to exist.
+fn parameterised_circuit_name(base: &str, player_count: usize) -> String {
+    if player_count >= MIN_PLAYERS && player_count < MAX_PLAYERS {
+        format!("{}_{}p", base, player_count)
+    } else {
+        base.to_string()
+    }
+}
 
 pub struct SessionGuard {
     counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -57,6 +70,15 @@ impl Drop for SessionGuard {
 ///
 /// Public chain parameters used by the frontend for wallet-signed
 /// on-chain transactions.
+#[utoipa::path(
+    get,
+    path = "/api/chain-config",
+    tag = "Chain",
+    responses(
+        (status = 200, description = "Chain configuration", body = ChainConfigResponse),
+        (status = 503, description = "Soroban not configured")
+    )
+)]
 pub async fn get_chain_config(
     State(state): State<AppState>,
 ) -> Result<Json<ChainConfigResponse>, StatusCode> {
@@ -75,6 +97,22 @@ pub async fn get_chain_config(
 ///
 /// Creates a new empty on-chain table by copying config from the reference
 /// table. Players then join directly on-chain with their own wallet auth.
+#[utoipa::path(
+    post,
+    path = "/api/tables/create",
+    tag = "Tables",
+    request_body = CreateTableRequest,
+    responses(
+        (status = 200, description = "Table created", body = CreateTableResponse),
+        (status = 400, description = "Invalid parameters"),
+        (status = 401, description = "Unauthorized"),
+        (status = 503, description = "Soroban not configured or solo mode disabled"),
+        (status = 502, description = "Soroban/MPC interaction failed")
+    ),
+    security(
+        ("WalletAuth" = [])
+    )
+)]
 pub async fn create_table(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -186,6 +224,8 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        mpc_node_progress: Vec::new(),
+        mpc_operation_started: None,
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -383,6 +423,8 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            mpc_node_progress: Vec::new(),
+            mpc_operation_started: None,
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -394,6 +436,7 @@ pub async fn request_deal(
     }
 
     let prepared_deal = mpc::prepare_deal_from_nodes(
+        &state.mpc_client,
         &node_endpoints,
         &state.mpc_config.circuit_dir,
         table_id,
@@ -407,11 +450,13 @@ pub async fn request_deal(
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
+        &state.mpc_client,
         table_id,
         &prepared_deal.share_set_ids,
         &proof_session_id,
-        "deal_valid",
+        &deal_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
@@ -474,6 +519,9 @@ pub async fn request_deal(
     session.showdown_session_id = None;
     session.showdown_result = None;
     session.proof_nonce = 0;
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(DealResponse {
         status: "dealt".to_string(),
@@ -563,6 +611,7 @@ pub async fn request_reveal(
     }
 
     let prepared_reveal = mpc::prepare_reveal_from_nodes(
+        &state.mpc_client,
         &node_endpoints,
         &state.mpc_config.circuit_dir,
         table_id,
@@ -579,6 +628,7 @@ pub async fn request_reveal(
     let proof_session_id = next_proof_session_id(session, &format!("reveal-{}", phase));
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let reveal_proof = mpc::generate_proof_from_share_sets(
+        &state.mpc_client,
         table_id,
         &prepared_reveal.share_set_ids,
         &proof_session_id,
@@ -642,6 +692,9 @@ pub async fn request_reveal(
     session
         .revealed_cards_by_phase
         .insert(phase.clone(), parsed_reveal.cards.clone());
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(RevealResponse {
         status: "revealed".to_string(),
@@ -714,6 +767,7 @@ pub async fn request_showdown(
     }
 
     let prepared_showdown = mpc::prepare_showdown_from_nodes(
+        &state.mpc_client,
         &node_endpoints,
         &state.mpc_config.circuit_dir,
         table_id,
@@ -730,11 +784,14 @@ pub async fn request_showdown(
 
     let proof_session_id = next_proof_session_id(session, "showdown");
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let showdown_circuit =
+        parameterised_circuit_name("showdown_valid", session.player_order.len());
     let showdown_proof = mpc::generate_proof_from_share_sets(
+        &state.mpc_client,
         table_id,
         &prepared_showdown.share_set_ids,
         &proof_session_id,
-        "showdown_valid",
+        &showdown_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
@@ -833,6 +890,9 @@ pub async fn request_showdown(
             parsed_showdown.winner_index,
         )
     };
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(ShowdownResponse {
         status,
@@ -931,6 +991,9 @@ pub async fn player_action(
     } else {
         Some(tx_hash)
     };
+
+    broadcast_table_state(&state, table_id).await;
+
     Ok(Json(PlayerActionResponse {
         status: "applied".to_string(),
         action: normalized,
@@ -988,7 +1051,7 @@ pub async fn get_player_cards(
     let positions = vec![*pos1, *pos2];
     drop(tables); // release read lock before async call
 
-    let (cards, salts) = mpc::resolve_hole_cards(&node_endpoints, table_id, &positions)
+    let (cards, salts) = mpc::resolve_hole_cards(&state.mpc_client, &node_endpoints, table_id, &positions)
         .await
         .map_err(|e| {
             tracing::error!("Failed to resolve hole cards: {}", e);
@@ -1007,6 +1070,89 @@ pub async fn get_player_cards(
     }))
 }
 
+/// Serializable snapshot of a table's in-memory session state, pushed to
+/// WebSocket subscribers of `/api/table/:table_id/state/ws` whenever a deal,
+/// reveal, showdown, or player action mutates it.
+#[derive(Serialize, Clone)]
+pub struct GameStateEvent {
+    pub table_id: u32,
+    pub phase: String,
+    pub deck_root: String,
+    pub board_indices: Vec<u32>,
+    pub dealt_indices: Vec<u32>,
+    pub deal_tx_hash: Option<String>,
+    pub reveal_tx_hashes: HashMap<String, String>,
+    pub showdown_tx_hash: Option<String>,
+    /// Raw on-chain `get_table` JSON (betting/pot/turn state), the same
+    /// payload `GET /api/table/:table_id/state` returns. `None` when Soroban
+    /// isn't configured or the read failed.
+    pub onchain_state: Option<String>,
+}
+
+impl GameStateEvent {
+    fn from_session(session: &TableSession) -> Self {
+        Self {
+            table_id: session.table_id,
+            phase: session.phase.clone(),
+            deck_root: session.deck_root.clone(),
+            board_indices: session.board_indices.clone(),
+            dealt_indices: session.dealt_indices.clone(),
+            deal_tx_hash: session.deal_tx_hash.clone(),
+            reveal_tx_hashes: session.reveal_tx_hashes.clone(),
+            showdown_tx_hash: session.showdown_tx_hash.clone(),
+            onchain_state: None,
+        }
+    }
+}
+
+/// Push the current state for `table_id` to any WebSocket clients subscribed
+/// via `/api/table/:table_id/state/ws`. No-op if nobody has connected for
+/// this table yet. Best-effort: a failed on-chain read still pushes the
+/// in-memory snapshot.
+pub async fn broadcast_table_state(state: &AppState, table_id: u32) {
+    let has_subscribers = {
+        let channels = state.game_state_channels.lock().await;
+        channels
+            .get(&table_id)
+            .map(|tx| tx.receiver_count() > 0)
+            .unwrap_or(false)
+    };
+    if !has_subscribers {
+        return;
+    }
+
+    let event = {
+        let tables = state.tables.read().await;
+        tables.get(&table_id).map(GameStateEvent::from_session)
+    };
+    let Some(mut event) = event else {
+        return;
+    };
+
+    if state.soroban_config.is_configured() {
+        event.onchain_state = soroban::get_table_state(&state.soroban_config, table_id)
+            .await
+            .ok();
+    }
+
+    let Ok(payload) = serde_json::to_string(&event) else {
+        return;
+    };
+
+    let channels = state.game_state_channels.lock().await;
+    if let Some(tx) = channels.get(&table_id) {
+        let _ = tx.send(payload);
+    }
+}
+
+/// Current state snapshot as JSON, used to greet a newly-connected
+/// WebSocket client so it doesn't have to wait for the next mutation.
+pub async fn current_game_state_json(state: &AppState, table_id: u32) -> Option<String> {
+    let tables = state.tables.read().await;
+    let event = tables.get(&table_id).map(GameStateEvent::from_session)?;
+    serde_json::to_string(&event).ok()
+}
+
 /// GET /api/table/{table_id}/state
 pub async fn get_table_state(
     State(state): State<AppState>,
@@ -1020,6 +1166,35 @@ pub async fn get_table_state(
         })?;
 
     Ok(Json(TableStateResponse { state: result }))
+}
+
+/// GET /api/table/{table_id}/mpc-status
+///
+/// Returns per-node MPC phase progress for the table's current operation.
+/// The frontend polls this during deal/reveal/showdown to show a live
+/// indicator of which nodes have responded.
+pub async fn get_mpc_status(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+) -> Result<Json<types::TableMpcStatusResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+
+    let tables = state.tables.read().await;
+    let session = tables.get(&table_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let active_sessions = state.mpc_sessions.read().await.len();
+
+    Ok(Json(types::TableMpcStatusResponse {
+        table_id,
+        phase: session.phase.clone(),
+        nodes: session.mpc_node_progress.clone(),
+        active_sessions,
+    }))
 }
 
 /// GET /api/committee/status

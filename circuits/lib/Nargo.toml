@@ -3,3 +3,6 @@ name = "stellar_poker_lib"
 type = "lib"
 authors = ["Stellar Poker"]
 compiler_version = ">=0.36.0"
+
+[package.metadata]
+description = "Reusable Noir library for card encoding, hand evaluation, commitment verification, and deck shuffling for Texas Hold'em ZK circuits."

@@ -179,7 +179,7 @@ describe("Wallet Integration Tests", () => {
   describe("Silent Reconnection", () => {
     it("successfully reconnects with stored credentials", async () => {
       // Mock localStorage with saved wallet type
-      vi.spyOn(Storage.prototype, "getItem").mockReturnValue("freighter");
+      vi.spyOn(localStorage, "getItem").mockReturnValue("freighter");
       
       // Ensure Freighter is installed and connected
       freighterMock.setConnected(true);
@@ -192,7 +192,7 @@ describe("Wallet Integration Tests", () => {
     });
 
     it("returns null when no stored credentials", async () => {
-      vi.spyOn(Storage.prototype, "getItem").mockReturnValue(null);
+      vi.spyOn(localStorage, "getItem").mockReturnValue(null);
       
       const { trySilentReconnect } = await import("../lib/wallet");
       const session = await trySilentReconnect();
@@ -201,7 +201,7 @@ describe("Wallet Integration Tests", () => {
     });
 
     it("handles reconnection failure gracefully", async () => {
-      vi.spyOn(Storage.prototype, "getItem").mockReturnValue("freighter");
+      vi.spyOn(localStorage, "getItem").mockReturnValue("freighter");
       freighterMock.setConnected(false);
       
       const { trySilentReconnect } = await import("../lib/wallet");
@@ -248,6 +248,82 @@ describe("Wallet Integration Tests", () => {
       // Verify the session can be used for signing
       const signature = await session.signMessage("transaction_data");
       expect(signature).toBeDefined();
+    });
+  });
+
+  describe("Freighter Extension Integrity Verification", () => {
+    it("successfully connects when extension ID and version are allowed", async () => {
+      freighterMock = new FreighterMock({
+        extensionId: "bcacfldlkkdogcmkkibnjlakofdplcbk",
+        version: "5.42.1"
+      });
+      freighterMock.install();
+
+      const { connectFreighterWallet } = await import("../lib/freighter");
+      const session = await connectFreighterWallet();
+      expect(session).toBeDefined();
+    });
+
+    it("throws error when extension ID is unrecognized", async () => {
+      freighterMock = new FreighterMock({
+        extensionId: "invalid-altered-extension-id",
+        version: "5.42.1"
+      });
+      freighterMock.install();
+
+      const { connectFreighterWallet } = await import("../lib/freighter");
+      await expect(connectFreighterWallet()).rejects.toThrow(/Unrecognized or altered Freighter wallet extension ID detected/);
+    });
+
+    it("throws error when version is outdated", async () => {
+      freighterMock = new FreighterMock({
+        extensionId: "bcacfldlkkdogcmkkibnjlakofdplcbk",
+        version: "4.9.9"
+      });
+      freighterMock.install();
+
+      const { connectFreighterWallet } = await import("../lib/freighter");
+      await expect(connectFreighterWallet()).rejects.toThrow(/Outdated Freighter wallet extension detected/);
+    });
+
+    it("blocks messages from untrusted origins", async () => {
+      freighterMock = new FreighterMock({
+        extensionId: "bcacfldlkkdogcmkkibnjlakofdplcbk",
+        version: "5.42.1"
+      });
+      freighterMock.install();
+
+      const { connectFreighterWallet } = await import("../lib/freighter");
+      await connectFreighterWallet();
+
+      const untrustedEvent = new MessageEvent("message", {
+        origin: "http://malicious-website.com",
+        data: { source: "freighter", action: "sign" }
+      });
+
+      expect(() => {
+        window.dispatchEvent(untrustedEvent);
+      }).toThrow(/Blocked message from untrusted origin/);
+    });
+
+    it("allows messages from trusted origin", async () => {
+      freighterMock = new FreighterMock({
+        extensionId: "bcacfldlkkdogcmkkibnjlakofdplcbk",
+        version: "5.42.1"
+      });
+      freighterMock.install();
+
+      const { connectFreighterWallet } = await import("../lib/freighter");
+      await connectFreighterWallet();
+
+      const trustedEvent = new MessageEvent("message", {
+        origin: window.location.origin,
+        data: { source: "freighter", action: "sign" }
+      });
+
+      expect(() => {
+        window.dispatchEvent(trustedEvent);
+      }).not.toThrow();
     });
   });
 });

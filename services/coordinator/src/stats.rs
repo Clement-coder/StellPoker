@@ -15,17 +15,18 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use utoipa::ToSchema;
 
 // ─── Data models ─────────────────────────────────────────────────────────────
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Clone, Debug, Default, ToSchema)]
 pub struct GlobalStats {
     pub hands_played: u64,
     pub biggest_pot: i64,
     pub total_players_joined: u64,
 }
 
-#[derive(Serialize, Clone, Debug, Default)]
+#[derive(Serialize, Clone, Debug, Default, ToSchema)]
 pub struct PlayerStats {
     pub address: String,
     pub hands_played: u64,
@@ -33,7 +34,7 @@ pub struct PlayerStats {
     pub biggest_pot_won: i64,
 }
 
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Clone, Debug, ToSchema)]
 pub struct StatsResponse {
     pub global: GlobalStats,
     /// Top-10 players by hands_won.

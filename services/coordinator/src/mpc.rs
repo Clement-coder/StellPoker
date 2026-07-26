@@ -4,9 +4,174 @@
 //! - Coordinator never generates or stores plaintext deck/salts.
 //! - Every MPC node prepares and dispatches only its own private contribution.
 //! - Nodes merge all source-party share fragments locally before proving.
+//!
+//! ## TLS / mTLS configuration for coordinator → node calls
+//!
+//! The coordinator can present a TLS client certificate and/or trust only
+//! specific MPC node certificates by setting environment variables:
+//!
+//! - `COORDINATOR_CLIENT_CERT_PATH` / `COORDINATOR_CLIENT_CERT_B64`
+//!   – PEM/DER of the coordinator's client cert presented to nodes.
+//! - `COORDINATOR_CLIENT_KEY_PATH`  / `COORDINATOR_CLIENT_KEY_B64`
+//!   – PEM/DER of the coordinator's client private key.
+//! - `MPC_NODE_CERT_PATHS`
+//!   – Comma-separated list of paths to the MPC node server certs to trust.
+//! - `MPC_NODE_CERT_B64S`
+//!   – Comma-separated list of base64-encoded DER node server certs to trust.
+//!
+//! If none of these are set the coordinator uses the default TLS/CA-chain
+//! behaviour (backwards compatible with plain HTTP node endpoints).
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+
+use crate::node_reliability;
+
+// ── TLS client factory ────────────────────────────────────────────────────────
+
+/// Build the shared `reqwest::Client` used for all coordinator → MPC node calls.
+///
+/// When TLS environment variables are present the client will:
+/// - Present the coordinator's identity certificate (mTLS client auth).
+/// - Only trust the configured MPC node server certificates (pinning).
+///
+/// Falls back to the default system CA bundle when no TLS vars are set.
+pub fn build_mpc_client() -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder();
+
+    // ── Optional: trust only specific node server certificates ───────────────
+    let node_cert_ders = load_node_cert_ders()?;
+    if !node_cert_ders.is_empty() {
+        // Disable default roots so only the pinned certs are trusted.
+        builder = builder.tls_built_in_root_certs(false);
+        for der in node_cert_ders {
+            let cert = reqwest::Certificate::from_der(&der)
+                .map_err(|e| format!("invalid MPC node cert DER: {}", e))?;
+            builder = builder.add_root_certificate(cert);
+        }
+        tracing::info!("MPC client: trusting only pinned node certificates");
+    }
+
+    // ── Optional: client identity (mTLS) ────────────────────────────────────
+    if let Some(identity) = load_coordinator_identity()? {
+        builder = builder.identity(identity);
+        tracing::info!("MPC client: using coordinator client certificate (mTLS)");
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("failed to build MPC reqwest client: {}", e))
+}
+
+/// Load DER bytes for each MPC node server certificate to trust.
+fn load_node_cert_ders() -> Result<Vec<Vec<u8>>, String> {
+    let mut ders: Vec<Vec<u8>> = Vec::new();
+
+    // Comma-separated file paths.
+    if let Ok(paths) = std::env::var("MPC_NODE_CERT_PATHS") {
+        for path in paths.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let raw = std::fs::read(path)
+                .map_err(|e| format!("MPC_NODE_CERT_PATHS: failed to read '{}': {}", path, e))?;
+            ders.push(pem_or_der_bytes(raw));
+        }
+    }
+
+    // Comma-separated base64-encoded DER values.
+    if let Ok(b64s) = std::env::var("MPC_NODE_CERT_B64S") {
+        for b64 in b64s.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let raw = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| format!("MPC_NODE_CERT_B64S: invalid base64: {}", e))?;
+            ders.push(raw);
+        }
+    }
+
+    Ok(ders)
+}
+
+/// Load the coordinator's mTLS client identity (cert + key) as a `reqwest::Identity`.
+fn load_coordinator_identity() -> Result<Option<reqwest::Identity>, String> {
+    // Try to load the certificate.
+    let cert_der = load_der_from_env(
+        "COORDINATOR_CLIENT_CERT_PATH",
+        "COORDINATOR_CLIENT_CERT_B64",
+    )?;
+    let key_der = load_der_from_env(
+        "COORDINATOR_CLIENT_KEY_PATH",
+        "COORDINATOR_CLIENT_KEY_B64",
+    )?;
+
+    match (cert_der, key_der) {
+        (Some(cert), Some(key)) => {
+            // reqwest accepts PEM bundles for identity.  We may have DER bytes;
+            // convert to PEM so reqwest can parse them.
+            let cert_pem = der_to_pem(&cert, "CERTIFICATE");
+            let key_pem = der_to_pem(&key, "PRIVATE KEY");
+            let mut bundle = cert_pem;
+            bundle.extend_from_slice(&key_pem);
+            let identity = reqwest::Identity::from_pem(&bundle)
+                .map_err(|e| format!("failed to load coordinator mTLS identity: {}", e))?;
+            Ok(Some(identity))
+        }
+        (None, None) => Ok(None),
+        (Some(_), None) => Err(
+            "COORDINATOR_CLIENT_CERT_PATH/B64 is set but COORDINATOR_CLIENT_KEY_PATH/B64 is missing"
+                .to_string(),
+        ),
+        (None, Some(_)) => Err(
+            "COORDINATOR_CLIENT_KEY_PATH/B64 is set but COORDINATOR_CLIENT_CERT_PATH/B64 is missing"
+                .to_string(),
+        ),
+    }
+}
+
+/// Load raw DER bytes from a file-path env var, falling back to a base64 env var.
+fn load_der_from_env(path_var: &str, b64_var: &str) -> Result<Option<Vec<u8>>, String> {
+    if let Ok(path) = std::env::var(path_var) {
+        let path = path.trim().to_string();
+        let raw = std::fs::read(&path)
+            .map_err(|e| format!("{} = {:?}: failed to read file: {}", path_var, path, e))?;
+        return Ok(Some(pem_or_der_bytes(raw)));
+    }
+    if let Ok(b64) = std::env::var(b64_var) {
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| format!("{}: invalid base64: {}", b64_var, e))?;
+        return Ok(Some(raw));
+    }
+    Ok(None)
+}
+
+/// If the bytes look like PEM (`-----BEGIN`), strip headers and return DER.
+/// Otherwise return as-is.
+fn pem_or_der_bytes(raw: Vec<u8>) -> Vec<u8> {
+    if raw.starts_with(b"-----") {
+        if let Ok(s) = std::str::from_utf8(&raw) {
+            let b64: String = s
+                .lines()
+                .filter(|l| !l.starts_with("-----"))
+                .collect::<Vec<_>>()
+                .join("");
+            if let Ok(der) = base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
+                return der;
+            }
+        }
+    }
+    raw
+}
+
+/// Encode DER bytes as PEM with the given label (`CERTIFICATE`, `PRIVATE KEY`, …).
+fn der_to_pem(der: &[u8], label: &str) -> Vec<u8> {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    // Fold at 64 chars per line (standard PEM).
+    let mut pem = format!("-----BEGIN {}-----\n", label);
+    for chunk in b64.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).unwrap_or(""));
+        pem.push('\n');
+    }
+    pem.push_str(&format!("-----END {}-----\n", label));
+    pem.into_bytes()
+}
 
 /// Result from MPC proof generation.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -44,13 +209,13 @@ struct NodePreparedSharesResponse {
 
 /// Generic helper: POST a JSON body to each MPC node's URL and collect share set IDs.
 async fn prepare_from_nodes(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     url_builder: impl Fn(&str, u32) -> String,
     table_id: u32,
     body: serde_json::Value,
     operation_name: &str,
 ) -> Result<PreparedShareSets, String> {
-    let client = reqwest::Client::new();
     let mut handles = Vec::with_capacity(node_endpoints.len());
 
     for (idx, endpoint) in node_endpoints.iter().enumerate() {
@@ -58,13 +223,19 @@ async fn prepare_from_nodes(
         let body = body.clone();
         let client = client.clone();
         let op = operation_name.to_string();
+        let endpoint = endpoint.clone();
         let handle = tokio::spawn(async move {
+            let call_start = std::time::Instant::now();
             let resp = client
                 .post(&url)
                 .json(&body)
                 .send()
                 .await
                 .map_err(|e| format!("failed to call node {} {}: {}", idx, op, e))?;
+            // Graceful degradation (issue #110): track round-trip latency so
+            // persistently slow nodes are logged and scored, without failing
+            // this call — the node did respond, just slowly.
+            node_reliability::record(&endpoint, call_start.elapsed()).await;
 
             if !resp.status().is_success() {
                 let status = resp.status();
@@ -92,12 +263,14 @@ async fn prepare_from_nodes(
 
 /// Ask all nodes to prepare deal share sets.
 pub async fn prepare_deal_from_nodes(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     circuit_dir: &str,
     table_id: u32,
     players: &[String],
 ) -> Result<PreparedShareSets, String> {
     prepare_from_nodes(
+        client,
         node_endpoints,
         |endpoint, tid| format!("{}/table/{}/prepare-deal", endpoint, tid),
         table_id,
@@ -112,6 +285,7 @@ pub async fn prepare_deal_from_nodes(
 
 /// Ask all nodes to prepare reveal share sets.
 pub async fn prepare_reveal_from_nodes(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     circuit_dir: &str,
     table_id: u32,
@@ -121,6 +295,7 @@ pub async fn prepare_reveal_from_nodes(
 ) -> Result<PreparedShareSets, String> {
     let phase = phase.to_string();
     prepare_from_nodes(
+        client,
         node_endpoints,
         move |endpoint, tid| format!("{}/table/{}/prepare-reveal/{}", endpoint, tid, phase),
         table_id,
@@ -136,6 +311,7 @@ pub async fn prepare_reveal_from_nodes(
 
 /// Ask all nodes to prepare showdown share sets.
 pub async fn prepare_showdown_from_nodes(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     circuit_dir: &str,
     table_id: u32,
@@ -145,6 +321,7 @@ pub async fn prepare_showdown_from_nodes(
     deck_root: &str,
 ) -> Result<PreparedShareSets, String> {
     prepare_from_nodes(
+        client,
         node_endpoints,
         |endpoint, tid| format!("{}/table/{}/prepare-showdown", endpoint, tid),
         table_id,
@@ -162,6 +339,7 @@ pub async fn prepare_showdown_from_nodes(
 
 /// Dispatch all prepared share sets and trigger MPC proof generation.
 pub async fn generate_proof_from_share_sets(
+    client: &reqwest::Client,
     table_id: u32,
     share_set_ids: &[String],
     session_id: &str,
@@ -170,6 +348,7 @@ pub async fn generate_proof_from_share_sets(
     node_endpoints: &[String],
 ) -> Result<MpcProofResult, String> {
     dispatch_share_sets_from_nodes(
+        client,
         node_endpoints,
         table_id,
         share_set_ids,
@@ -177,7 +356,7 @@ pub async fn generate_proof_from_share_sets(
         circuit_name,
     )
     .await?;
-    trigger_and_collect_proof(session_id, circuit_name, circuit_dir, node_endpoints).await
+    trigger_and_collect_proof(client, session_id, circuit_name, circuit_dir, node_endpoints).await
 }
 
 #[derive(Deserialize)]
@@ -191,6 +370,7 @@ struct NodePermLookupResponse {
 ///
 /// Returns (card_values, combined_salts) for the given deck positions.
 pub async fn resolve_hole_cards(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     table_id: u32,
     card_positions: &[u32],
@@ -201,8 +381,6 @@ pub async fn resolve_hole_cards(
             node_endpoints.len()
         ));
     }
-
-    let client = reqwest::Client::new();
 
     // Step 1: Query all 3 nodes in parallel with original positions to get salts.
     // Also use node2's mapped_indices as the first step of the permutation chain.
@@ -317,10 +495,12 @@ async fn query_perm_lookup(
 }
 
 /// Check health of all MPC nodes.
-pub async fn check_node_health(endpoints: &[String]) -> Vec<bool> {
+pub async fn check_node_health(client: &reqwest::Client, endpoints: &[String]) -> Vec<bool> {
     let mut results = Vec::new();
     for endpoint in endpoints {
-        let healthy = reqwest::get(format!("{}/health", endpoint))
+        let healthy = client
+            .get(format!("{}/health", endpoint))
+            .send()
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false);
@@ -354,6 +534,7 @@ async fn collect_prepared_share_sets(
 }
 
 async fn dispatch_share_sets_from_nodes(
+    client: &reqwest::Client,
     node_endpoints: &[String],
     table_id: u32,
     share_set_ids: &[String],
@@ -368,7 +549,6 @@ async fn dispatch_share_sets_from_nodes(
         ));
     }
 
-    let client = reqwest::Client::new();
     let mut handles = Vec::with_capacity(node_endpoints.len());
 
     for (idx, endpoint) in node_endpoints.iter().enumerate() {
@@ -415,6 +595,7 @@ async fn dispatch_share_sets_from_nodes(
 }
 
 async fn trigger_and_collect_proof(
+    client: &reqwest::Client,
     session_id: &str,
     circuit_name: &str,
     circuit_dir: &str,
@@ -423,8 +604,6 @@ async fn trigger_and_collect_proof(
     if node_endpoints.is_empty() {
         return Err("no MPC node endpoints configured".to_string());
     }
-
-    let client = reqwest::Client::new();
 
     // Node expects CRS directory (it appends bn254_g1.dat internally).
     let crs_dir = std::env::var("CRS_DIR").unwrap_or_else(|_| "./crs".to_string());
@@ -466,22 +645,46 @@ async fn trigger_and_collect_proof(
         handle.await.map_err(|e| format!("join error: {}", e))??;
     }
 
-    // Poll node 0 for proof completion.
+    // Poll node 0 for proof completion. Graceful degradation (issue #110): a
+    // node that is merely slow — not dead — extends the poll deadline
+    // instead of failing the whole session, up to a bounded hard ceiling so
+    // a genuinely unresponsive node still eventually times out.
     let proof_node = &node_endpoints[0];
-    let max_polls = if circuit_name == "showdown_valid" {
+    let base_max_polls: u32 = if circuit_name == "showdown_valid" {
         900
     } else {
         300
     };
-    for _ in 0..max_polls {
+    let hard_ceiling = base_max_polls * 2;
+    let mut deadline_polls = base_max_polls;
+
+    let mut polls_done: u32 = 0;
+    while polls_done < deadline_polls {
+        polls_done += 1;
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
         let status_url = format!("{}/session/{}/status", proof_node, session_id);
-        let resp = client
-            .get(&status_url)
-            .send()
-            .await
-            .map_err(|e| format!("failed to poll node 0: {}", e))?;
+        let poll_start = std::time::Instant::now();
+        let resp = client.get(&status_url).send().await;
+        let was_slow = node_reliability::record(proof_node, poll_start.elapsed()).await;
+        if was_slow && deadline_polls < hard_ceiling {
+            deadline_polls = (deadline_polls + 1).min(hard_ceiling);
+            tracing::warn!(
+                node = %proof_node,
+                session_id = %session_id,
+                latency_ms = poll_start.elapsed().as_millis(),
+                extended_deadline_polls = deadline_polls,
+                "MPC node slow during proof polling; extending session deadline"
+            );
+        }
+
+        let resp = match resp {
+            Ok(r) => r,
+            // A transient poll failure is treated the same as a slow
+            // response above: retry within the (possibly extended)
+            // deadline rather than aborting the session immediately.
+            Err(_) => continue,
+        };
 
         if !resp.status().is_success() {
             continue;
@@ -533,8 +736,10 @@ async fn trigger_and_collect_proof(
     }
 
     Err(format!(
-        "[{}] proof generation timed out after {} seconds",
-        session_id, max_polls
+        "[{}] proof generation timed out after {} seconds ({} of them from deadline extensions granted to slow nodes)",
+        session_id,
+        polls_done,
+        deadline_polls.saturating_sub(base_max_polls)
     ))
 }
 
@@ -554,10 +759,14 @@ mod error_handling_tests {
     // Nothing listens on port 1: connections are refused immediately.
     const DEAD_NODE: &str = "http://127.0.0.1:1";
 
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::new()
+    }
+
     #[tokio::test]
     async fn prepare_deal_errors_when_node_unreachable() {
         let endpoints = vec![DEAD_NODE.to_string()];
-        let err = prepare_deal_from_nodes(&endpoints, "/circuits", 1, &["P1".to_string()])
+        let err = prepare_deal_from_nodes(&test_client(), &endpoints, "/circuits", 1, &["P1".to_string()])
             .await
             .unwrap_err();
         assert!(err.contains("prepare-deal"), "got: {err}");
@@ -565,13 +774,13 @@ mod error_handling_tests {
 
     #[tokio::test]
     async fn check_node_health_reports_unreachable_as_unhealthy() {
-        let health = check_node_health(&[DEAD_NODE.to_string()]).await;
+        let health = check_node_health(&test_client(), &[DEAD_NODE.to_string()]).await;
         assert_eq!(health, vec![false]);
     }
 
     #[tokio::test]
     async fn resolve_hole_cards_requires_three_nodes() {
-        let err = resolve_hole_cards(&["a".to_string(), "b".to_string()], 1, &[0])
+        let err = resolve_hole_cards(&test_client(), &["a".to_string(), "b".to_string()], 1, &[0])
             .await
             .unwrap_err();
         assert!(err.contains("expected 3 MPC nodes"), "got: {err}");
@@ -581,6 +790,7 @@ mod error_handling_tests {
     async fn dispatch_rejects_node_share_count_mismatch() {
         // 2 nodes but only 1 prepared share set => orchestration inconsistency.
         let err = dispatch_share_sets_from_nodes(
+            &test_client(),
             &["n0".to_string(), "n1".to_string()],
             1,
             &["share0".to_string()],
@@ -594,7 +804,7 @@ mod error_handling_tests {
 
     #[tokio::test]
     async fn trigger_proof_requires_node_endpoints() {
-        let err = trigger_and_collect_proof("sess", "deal_valid", "/circuits", &[])
+        let err = trigger_and_collect_proof(&test_client(), "sess", "deal_valid", "/circuits", &[])
             .await
             .unwrap_err();
         assert!(err.contains("no MPC node endpoints configured"), "got: {err}");
@@ -640,6 +850,10 @@ mod byzantine_fault_tolerance_tests {
     use axum::{http::StatusCode, routing::post, Router};
     use tokio::net::TcpListener;
 
+    fn test_client() -> reqwest::Client {
+        reqwest::Client::new()
+    }
+
     /// Spawn a local axum HTTP server on a random port and return its base URL.
     async fn spawn_test_server(router: Router) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -663,7 +877,7 @@ mod byzantine_fault_tolerance_tests {
         );
         let endpoint = spawn_test_server(router).await;
 
-        let err = prepare_deal_from_nodes(&[endpoint], "/circuits", 1, &["P1".to_string()])
+        let err = prepare_deal_from_nodes(&test_client(), &[endpoint], "/circuits", 1, &["P1".to_string()])
             .await
             .unwrap_err();
 
@@ -690,7 +904,7 @@ mod byzantine_fault_tolerance_tests {
         let endpoint = spawn_test_server(router).await;
 
         let result =
-            prepare_deal_from_nodes(&[endpoint], "/circuits", 1, &["P1".to_string()]).await;
+            prepare_deal_from_nodes(&test_client(), &[endpoint], "/circuits", 1, &["P1".to_string()]).await;
 
         match result {
             Err(e) => assert!(
@@ -723,7 +937,7 @@ mod byzantine_fault_tolerance_tests {
         );
         let endpoint = spawn_test_server(router).await;
 
-        let err = prepare_deal_from_nodes(&[endpoint], "/circuits", 1, &["P1".to_string()])
+        let err = prepare_deal_from_nodes(&test_client(), &[endpoint], "/circuits", 1, &["P1".to_string()])
             .await
             .unwrap_err();
 
@@ -753,6 +967,7 @@ mod byzantine_fault_tolerance_tests {
         let byzantine = spawn_test_server(byzantine_router).await;
 
         let err = prepare_deal_from_nodes(
+            &test_client(),
             &[honest, byzantine],
             "/circuits",
             1,
@@ -783,6 +998,7 @@ mod byzantine_fault_tolerance_tests {
         let endpoint = spawn_test_server(router).await;
 
         let err = prepare_reveal_from_nodes(
+            &test_client(),
             &[endpoint],
             "/circuits",
             1,
@@ -819,7 +1035,7 @@ mod byzantine_fault_tolerance_tests {
 
         let result = tokio::time::timeout(
             Duration::from_secs(2),
-            prepare_deal_from_nodes(&[endpoint], "/circuits", 1, &["P1".to_string()]),
+            prepare_deal_from_nodes(&test_client(), &[endpoint], "/circuits", 1, &["P1".to_string()]),
         )
         .await;
 
@@ -863,7 +1079,7 @@ mod byzantine_fault_tolerance_tests {
         let e2 = spawn_test_server(honest()).await;
 
         let result =
-            tokio::time::timeout(Duration::from_secs(2), resolve_hole_cards(&[e0, e1, e2], 1, &[0, 1]))
+            tokio::time::timeout(Duration::from_secs(2), resolve_hole_cards(&test_client(), &[e0, e1, e2], 1, &[0, 1]))
                 .await;
 
         assert!(
@@ -877,7 +1093,7 @@ mod byzantine_fault_tolerance_tests {
     /// This fires immediately without any network call.
     #[tokio::test]
     async fn zero_node_committee_rejected_before_proof_generation() {
-        let err = trigger_and_collect_proof("sess_zero_nodes", "deal_valid", "/circuits", &[])
+        let err = trigger_and_collect_proof(&test_client(), "sess_zero_nodes", "deal_valid", "/circuits", &[])
             .await
             .unwrap_err();
 
@@ -910,6 +1126,7 @@ mod byzantine_fault_tolerance_tests {
         let e1 = spawn_test_server(make_colluding(COLLUDED_ID)).await;
 
         let shares = prepare_deal_from_nodes(
+            &test_client(),
             &[e0, e1],
             "/circuits",
             1,
@@ -950,7 +1167,7 @@ mod byzantine_fault_tolerance_tests {
         let e1 = spawn_test_server(byzantine()).await;
         let e2 = spawn_test_server(byzantine()).await;
 
-        let err = resolve_hole_cards(&[e0, e1, e2], 1, &[0, 1])
+        let err = resolve_hole_cards(&test_client(), &[e0, e1, e2], 1, &[0, 1])
             .await
             .unwrap_err();
 
@@ -982,6 +1199,7 @@ mod byzantine_fault_tolerance_tests {
         let e2 = spawn_test_server(cartel_router()).await;
 
         let err = prepare_deal_from_nodes(
+            &test_client(),
             &[e0, e1, e2],
             "/circuits",
             1,
@@ -1004,6 +1222,7 @@ mod byzantine_fault_tolerance_tests {
     #[tokio::test]
     async fn subthreshold_committee_rejected_by_preflight_guard() {
         let err = resolve_hole_cards(
+            &test_client(),
             &["http://node0".to_string(), "http://node1".to_string()],
             1,
             &[0],
@@ -1023,6 +1242,7 @@ mod byzantine_fault_tolerance_tests {
     #[tokio::test]
     async fn byzantine_orchestration_share_mismatch_blocked_before_dispatch() {
         let err = dispatch_share_sets_from_nodes(
+            &test_client(),
             &["http://node0".to_string(), "http://node1".to_string()],
             1,
             &["share_for_node0_only".to_string()], // 1 share for 2 nodes

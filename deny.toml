@@ -1,0 +1,70 @@
+# cargo-deny configuration for the StellPoker workspace.
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+# Evaluate all workspace members; no target filtering needed since soroban
+# contracts compile to wasm32 but share the same dependency graph.
+targets = []
+
+# ── Advisories ────────────────────────────────────────────────────────────────
+[advisories]
+version = 2
+# Deny crates with known CVEs; warn on unmaintained / yanked.
+vulnerability = "deny"
+unmaintained  = "warn"
+yanked        = "warn"
+notice        = "warn"
+# Add advisory IDs here to suppress a known false-positive, with a comment
+# explaining why and a revisit date.
+ignore = []
+
+# ── Licenses ──────────────────────────────────────────────────────────────────
+[licenses]
+version = 2
+# Common permissive licenses used throughout the Rust / Stellar / ZK ecosystem.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "BSL-1.0",
+]
+# Require at least 80 % confidence when auto-detecting a license file.
+confidence-threshold = 0.8
+# Crates whose license files are not machine-readable can be allowed here.
+exceptions = []
+
+# ── Bans ──────────────────────────────────────────────────────────────────────
+[bans]
+# Warn (not deny) on multiple versions of the same crate — the soroban + ZK
+# dependency graph regularly pulls in two generations of common crates.
+multiple-versions = "warn"
+wildcards         = "allow"
+highlight         = "all"
+# Crates that must never appear in the dependency graph.
+deny = []
+# Crates that are allowed to appear in multiple versions.
+skip = []
+skip-tree = []
+
+# ── Sources ───────────────────────────────────────────────────────────────────
+[sources]
+# Only crates.io and the git repositories listed below are permitted.
+unknown-registry = "deny"
+unknown-git      = "deny"
+allow-registry   = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    # Stellar Soroban SDK (pinned rev in workspace Cargo.toml)
+    "https://github.com/stellar/rs-soroban-sdk",
+    "https://github.com/stellar/rs-soroban-sdk.git",
+    # Soroban host env (pulled in transitively by vendor crate)
+    "https://github.com/stellar/rs-soroban-env",
+    # Poseidon hash implementation used by Noir-lang circuits
+    "https://github.com/noir-lang/poseidon",
+]

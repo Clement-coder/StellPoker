@@ -116,6 +116,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: trivy-scan-results
+        continue-on-error: true
 
       - name: Generate scan summary
         run: |
@@ -128,4 +129,6 @@ jobs:
             ls -1 *-trivy-results.sarif | sed 's/-trivy-results.sarif//' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Results are available in the Security tab." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ No scan results available. Check whether the image build and scan steps completed successfully." >> $GITHUB_STEP_SUMMARY
           fi

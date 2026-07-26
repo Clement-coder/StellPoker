@@ -1,0 +1,53 @@
+name: Feature Request
+description: Propose a new feature or enhancement for StellPoker
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please describe the problem you're trying to solve and your proposed solution.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? Who is affected and how often?
+      placeholder: As a player I find it hard to... / As a developer I have to manually...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the feature or change you'd like to see.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you think about? Why is your proposal better?
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - Frontend (Next.js app)
+        - Coordinator service
+        - MPC node
+        - Soroban contracts
+        - ZK circuits
+        - stellar-zk-cards library
+        - Infrastructure / docker-compose
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Mockups, links to prior art, related issues, or any other context.

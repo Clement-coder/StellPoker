@@ -1,0 +1,5 @@
+Gateway note for #349:
+- AWS WAF provides IP allowlisting + rate limiting.
+- ALB HTTPS listener provides TLS termination.
+- AWS Shield is enabled for ALB when enabled.
+

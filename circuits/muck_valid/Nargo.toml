@@ -1,0 +1,16 @@
+[package]
+name = "muck_valid"
+type = "bin"
+authors = ["Stellar Poker"]
+compiler_version = ">=0.36.0"
+
+[dependencies]
+stellar_poker_lib = { path = "../lib" }
+
+[package.metadata.circuit]
+description = "Prove folded hand commitment matches derived hole cards from shared deck, with no impact on final settlement."
+constraint_count = 15000
+proof_size_bytes = 16256
+public_inputs_bytes = 576
+poseidon2_permutations = 64
+max_players = 6

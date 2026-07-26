@@ -1,0 +1,218 @@
+name: Dependency Check
+
+on:
+  # Run every Monday at 09:00 UTC to catch newly disclosed advisories and
+  # accumulate the weekly outdated-dependency comment on the tracking issue.
+  schedule:
+    - cron: '0 9 * * 1'
+
+  # Also run on any push / PR that touches the dependency graph so regressions
+  # are caught before they land on main.
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+
+# One concurrent run per branch; cancel superseded push runs but let PRs finish.
+concurrency:
+  group: dependency-check-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  # ── Job 1: cargo deny ────────────────────────────────────────────────────────
+  # Checks for:
+  #   • Known CVEs via the RustSec advisory database
+  #   • License compliance against the allow-list in deny.toml
+  #   • Banned crates and disallowed source registries
+  # Blocks PRs and pushes on hard violations; weekly schedule keeps advisory
+  # coverage current even when no Cargo files changed.
+  cargo-deny:
+    name: Advisories & licenses (cargo deny)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-deny binary
+        id: cache-deny
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-deny-0.16
+
+      - name: Install cargo-deny
+        if: steps.cache-deny.outputs.cache-hit != 'true'
+        run: cargo install cargo-deny --locked --version "^0.16"
+
+      - name: Run cargo deny check
+        run: cargo deny check
+
+      - name: Write deny summary
+        if: always()
+        run: |
+          echo "## cargo deny results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cargo deny check 2>&1 | sed 's/^/    /' >> $GITHUB_STEP_SUMMARY || true
+
+  # ── Job 2: cargo outdated (weekly schedule only) ─────────────────────────────
+  # Produces a human-readable table of crates that have newer versions on
+  # crates.io and posts it as a comment on the dependency-tracking issue,
+  # creating that issue automatically if it does not yet exist.
+  cargo-outdated:
+    name: Outdated dependencies report (cargo outdated)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-outdated binary
+        id: cache-outdated
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-outdated
+          key: ${{ runner.os }}-cargo-outdated-0.15
+
+      - name: Install cargo-outdated
+        if: steps.cache-outdated.outputs.cache-hit != 'true'
+        run: cargo install cargo-outdated --locked --version "^0.15"
+
+      - name: Run cargo outdated
+        # --exit-code 0 keeps the step green regardless of whether deps are
+        # outdated — we report findings via the issue comment, not CI failure.
+        run: |
+          cargo outdated --workspace --exit-code 0 2>&1 | tee outdated-report.txt
+          echo "outdated_count=$(grep -c '^[a-zA-Z]' outdated-report.txt || echo 0)" >> $GITHUB_ENV
+
+      - name: Post weekly comment to tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs   = require('fs');
+            const date = new Date().toISOString().split('T')[0];
+
+            // ── 1. Find or create the tracking issue ──────────────────────
+            const LABEL = 'dependency-tracking';
+
+            // Ensure the label exists (idempotent).
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                name:  LABEL,
+                color: '0075ca',
+                description: 'Tracks weekly Rust dependency update reports',
+              });
+            } catch (e) {
+              // 422 = label already exists — safe to ignore.
+              if (e.status !== 422) throw e;
+            }
+
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              labels:   LABEL,
+              state:    'open',
+              per_page: 1,
+            });
+
+            let issueNumber;
+            if (openIssues.length === 0) {
+              const { data: created } = await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title:  'Dependency Update Tracking',
+                labels: [LABEL],
+                body: [
+                  '## Dependency Update Tracking',
+                  '',
+                  'This issue is maintained automatically by the **Dependency Check** CI',
+                  'workflow (`.github/workflows/dependency-check.yml`).',
+                  '',
+                  'Each Monday a new comment is posted here with the output of',
+                  '`cargo outdated --workspace`, listing Rust crates that have newer',
+                  'versions available on crates.io.',
+                  '',
+                  '**Action:** Review the weekly report comments below and open a PR to',
+                  'bump any dependency that warrants an upgrade. Close this issue only',
+                  'if you intend to stop the automated reports.',
+                ].join('\n'),
+              });
+              issueNumber = created.number;
+              console.log(`Created tracking issue #${issueNumber}`);
+            } else {
+              issueNumber = openIssues[0].number;
+              console.log(`Using existing tracking issue #${issueNumber}`);
+            }
+
+            // ── 2. Build the comment body ─────────────────────────────────
+            const raw = fs.readFileSync('outdated-report.txt', 'utf8').trim();
+
+            // Determine whether there is anything to act on.
+            const hasOutdated = raw.includes('->');
+
+            const workflowUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`;
+
+            const body = [
+              `## Weekly Dependency Report — ${date}`,
+              '',
+              hasOutdated
+                ? '> **Action required:** one or more crates have newer versions available.'
+                : '> All workspace dependencies are up to date.',
+              '',
+              '<details>',
+              '<summary><code>cargo outdated --workspace</code> output</summary>',
+              '',
+              '```',
+              raw || '(no output)',
+              '```',
+              '',
+              '</details>',
+              '',
+              `_Generated by [Dependency Check workflow](${workflowUrl}) · ${date}_`,
+            ].join('\n');
+
+            // ── 3. Post the comment ───────────────────────────────────────
+            await github.rest.issues.createComment({
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
+
+            console.log(`Posted weekly report to issue #${issueNumber}`);
+
+            // ── 4. Surface a link in the job summary ─────────────────────
+            const issueUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}` +
+              `/issues/${issueNumber}`;
+
+            const summaryLines = [
+              '## Weekly Dependency Report',
+              '',
+              `Comment posted to [Dependency Update Tracking #${issueNumber}](${issueUrl}).`,
+              '',
+              hasOutdated
+                ? '**Status:** outdated crates found — review the tracking issue.'
+                : '**Status:** all dependencies are current.',
+            ];
+            await core.summary.addRaw(summaryLines.join('\n')).write();

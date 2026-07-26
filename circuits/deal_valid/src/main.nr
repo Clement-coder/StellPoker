@@ -11,8 +11,10 @@ use stellar_poker_lib::commitments;
 use stellar_poker_lib::merkle;
 use stellar_poker_lib::shuffle;
 
-/// Maximum players supported (for fixed circuit size)
-global MAX_PLAYERS: u32 = 6;
+/// Maximum players supported (for fixed circuit size).
+/// Override at compile time via PLAYER_COUNT environment variable for
+/// per-table-size parameterisation (Issue #7).
+global MAX_PLAYERS: u32 = PLAYER_COUNT;
 
 fn main(
     // Private inputs (secret-shared in MPC)

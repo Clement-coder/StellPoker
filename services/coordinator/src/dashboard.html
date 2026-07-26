@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stellar Poker - Local Stack Dashboard</title>
+    <style>
+      :root {
+        --bg: #0e0f12;
+        --panel: #16181d;
+        --panel-2: #1c1f26;
+        --border: #2a2e38;
+        --text: #e7eaf0;
+        --muted: #8a92a1;
+        --ok: #22c55e;
+        --warn: #f59e0b;
+        --bad: #ef4444;
+        --accent: #5b8def;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
+      }
+      header {
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: var(--panel);
+      }
+      header h1 { font-size: 16px; margin: 0; letter-spacing: 0.2px; }
+      header .meta { color: var(--muted); font-size: 12px; }
+      main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+      .grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      }
+      .card {
+        border: 1px solid var(--border);
+        background: var(--panel);
+        border-radius: 10px;
+        padding: 16px 18px;
+      }
+      .card h2 {
+        font-size: 13px;
+        margin: 0 0 4px 0;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .card .name { font-size: 16px; font-weight: 600; margin-bottom: 12px; }
+      .card .row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; color: var(--muted); margin: 4px 0; }
+      .card .row span:last-child { color: var(--text); word-break: break-all; text-align: right; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+      }
+      .pill .dot { width: 8px; height: 8px; border-radius: 999px; background: currentColor; }
+      .pill.ok { color: var(--ok); background: rgba(34, 197, 94, 0.12); }
+      .pill.bad { color: var(--bad); background: rgba(239, 68, 68, 0.12); }
+      .pill.warn { color: var(--warn); background: rgba(245, 158, 11, 0.12); }
+      .pill.unknown { color: var(--muted); background: rgba(138, 146, 161, 0.12); }
+      .banner-error {
+        margin-bottom: 16px;
+        padding: 12px 16px;
+        border: 1px solid rgba(239, 68, 68, 0.35);
+        background: rgba(239, 68, 68, 0.08);
+        color: var(--bad);
+        border-radius: 8px;
+        font-size: 13px;
+      }
+      footer { color: var(--muted); font-size: 12px; padding: 24px; text-align: center; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Stellar Poker · Local Stack</h1>
+      <div class="meta">
+        Polls <a href="/api/health">/api/health</a> · last update
+        <span id="last-update">never</span>
+      </div>
+    </header>
+    <main>
+      <div id="error" class="banner-error" hidden></div>
+      <div id="grid" class="grid"></div>
+    </main>
+    <footer>
+      Stellar Poker coordinator dashboard. Served by the coordinator binary at
+      localhost:8080.
+    </footer>
+    <script>
+      const POLL_MS = 5000;
+      const grid = document.getElementById('grid');
+      const lastUpdate = document.getElementById('last-update');
+      const errorBanner = document.getElementById('error');
+
+      function pill(state, label) {
+        const cls = ['ok', 'bad', 'warn', 'unknown'].includes(state) ? state : 'unknown';
+        return `<span class="pill ${cls}"><span class="dot"></span>${label}</span>`;
+      }
+
+      function fmtTime(seconds) {
+        if (typeof seconds !== 'number') return '-';
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h) return `${h}h ${m}m`;
+        if (m) return `${m}m ${s}s`;
+        return `${s}s`;
+      }
+
+      function card(title, name, state, label, rows) {
+        const body = rows
+          .map(([k, v]) => `<div class="row"><span>${k}</span><span>${v ?? '-'}</span></div>`)
+          .join('');
+        return `<div class="card"><h2>${title}</h2><div class="name">${name}</div>${pill(state, label)}<div style="margin-top:12px">${body}</div></div>`;
+      }
+
+      function render(health) {
+        errorBanner.hidden = true;
+        const cards = [];
+
+        // Coordinator (this service, by definition reachable if we got a response).
+        cards.push(
+          card('Coordinator', 'coordinator', 'ok', 'running', [
+            ['Uptime', fmtTime(health.uptime_seconds)],
+            ['Active MPC sessions', health.active_mpc_sessions ?? 0],
+            ['Maintenance mode', health.maintenance_mode ? 'on' : 'off'],
+          ]),
+        );
+
+        // Soroban container.
+        const soroban = health.soroban_rpc || {};
+        const sorobanOk = soroban.status === 'connected';
+        cards.push(
+          card('Soroban container', 'soroban-rpc', sorobanOk ? 'ok' : 'bad', soroban.status || 'unknown', [
+            ['Endpoint', soroban.endpoint],
+          ]),
+        );
+
+        // MPC nodes (typically three).
+        (health.mpc_nodes || []).forEach((node, i) => {
+          const ok = node.connected === true;
+          cards.push(
+            card(`MPC node ${i}`, node.endpoint, ok ? 'ok' : 'bad', ok ? 'connected' : 'disconnected', [
+              ['Last heartbeat', node.last_heartbeat ? new Date(node.last_heartbeat * 1000 || node.last_heartbeat).toLocaleTimeString() : '-'],
+            ]),
+          );
+        });
+
+        // Contract deployment status.
+        const cd = health.contract_deployment || {};
+        const cdOk = cd.configured === true;
+        cards.push(
+          card('Contract deployment', 'poker_table', cdOk ? 'ok' : 'warn', cdOk ? 'configured' : 'not configured', [
+            ['Contract id', cd.contract_id && cd.contract_id.length ? cd.contract_id : '-'],
+          ]),
+        );
+
+        grid.innerHTML = cards.join('');
+        lastUpdate.textContent = new Date().toLocaleTimeString();
+      }
+
+      async function tick() {
+        try {
+          const res = await fetch('/api/health', { cache: 'no-store' });
+          if (!res.ok) throw new Error(`/api/health responded with ${res.status}`);
+          const data = await res.json();
+          render(data);
+        } catch (err) {
+          errorBanner.textContent = `Could not reach the coordinator: ${err.message}. Retrying...`;
+          errorBanner.hidden = false;
+          lastUpdate.textContent = 'stale';
+        }
+      }
+
+      tick();
+      setInterval(tick, POLL_MS);
+    </script>
+  </body>
+</html>

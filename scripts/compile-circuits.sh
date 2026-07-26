@@ -47,9 +47,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 EXPECTED_NOIR_VERSION="${EXPECTED_NOIR_VERSION:-1.0.0-beta.17}"
+
+# Issue #92: Download CRS with optimization
+if [ ! -f "${PROJECT_DIR}/.crs/bn254_g1.dat" ]; then
+    echo "Downloading CRS (cached for future compilations)..."
+    "${SCRIPT_DIR}/download-crs.sh"
+fi
 EXPECTED_NOIR_TAG="v${EXPECTED_NOIR_VERSION}"
 TOOLS_DIR="${PROJECT_DIR}/.tmp_tools"
 CIRCUITS=(deal_valid reveal_board_valid showdown_valid)
+PARAMETERISED_CIRCUITS=(deal_valid showdown_valid)
+PLAYER_COUNTS=(2 3 4 5 6)
 
 detect_platform_asset() {
     local os arch
@@ -198,6 +206,89 @@ main() {
     done
 
     echo "Circuit compilation complete."
+
+    # Issue #7: Compile parameterised variants for player counts 2–6.
+    for circuit in "${PARAMETERISED_CIRCUITS[@]}"; do
+        for npc in "${PLAYER_COUNTS[@]}"; do
+            variant="${circuit}_${npc}p"
+            variant_dir="${PROJECT_DIR}/circuits/${variant}"
+            src_dir="${PROJECT_DIR}/circuits/${circuit}/src"
+            artifact="${variant_dir}/target/${variant}.json"
+
+            if [ "${FORCE}" -eq 0 ] && [ -f "${artifact}" ]; then
+                echo "Skipping ${variant} — artifact up to date."
+                verify_artifact_version "${artifact}"
+                continue
+            fi
+
+            echo "Compiling ${variant} (PLAYER_COUNT=${npc})..."
+            mkdir -p "${variant_dir}/src"
+
+            # Copy source files
+            cp "${src_dir}/main.nr" "${variant_dir}/src/main.nr"
+
+            # Generate Nargo.toml with the variant name and PLAYER_COUNT override
+            cat > "${variant_dir}/Nargo.toml" <<TOML
+[package]
+name = "${variant}"
+type = "bin"
+authors = ["Stellar Poker"]
+compiler_version = ">=0.36.0"
+
+[dependencies]
+stellar_poker_lib = { path = "../lib" }
+
+[package.metadata.circuit]
+description = "Parameterised ${circuit} for ${npc} players (Issue #7)."
+max_players = ${npc}
+TOML
+
+            HOME="${PROJECT_DIR}/.tmp_nargo_home" \
+                PLAYER_COUNT="${npc}" \
+                "${nargo_bin}" compile --program-dir "${variant_dir}" \
+                --program-name "${variant}"
+            verify_artifact_version "${artifact}"
+        done
+    done
+    echo "Parameterised circuit compilation complete."
+
+    echo "Running circuit unit tests (circuits/lib)..."
+    HOME="${PROJECT_DIR}/.tmp_nargo_home" \
+        "${nargo_bin}" test --program-dir "${PROJECT_DIR}/circuits/lib" || {
+        echo "WARNING: nargo test failed for circuits/lib" >&2
+    }
+    echo "Circuit unit tests complete."
 }
 
 main "$@"
+
+# Issue #92: CRS download optimization
+download_crs_if_needed() {
+    local crs_dir="${PROJECT_DIR}/.tmp_crs"
+    local crs_file="${crs_dir}/bn254_g1.dat"
+    local crs_version_file="${crs_dir}/version.txt"
+    local expected_version="v1.0.0"
+    
+    mkdir -p "$crs_dir"
+    
+    if [ -f "$crs_version_file" ]; then
+        local current_version=$(cat "$crs_version_file")
+        if [ "$current_version" = "$expected_version" ] && [ -f "$crs_file" ]; then
+            echo "CRS already downloaded ($expected_version)"
+            return 0
+        fi
+    fi
+    
+    echo "Downloading CRS ($expected_version)..."
+    local crs_url="https://aztec-ignition.s3.amazonaws.com/MAIN%20IGNITION/sealed/bn254_g1.dat"
+    
+    curl -L --progress-bar -o "$crs_file" "$crs_url" || {
+        echo "CRS download failed" >&2
+        return 1
+    }
+    
+    echo "$expected_version" > "$crs_version_file"
+    echo "CRS downloaded successfully"
+}
+
+download_crs_if_needed

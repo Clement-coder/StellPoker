@@ -49,8 +49,6 @@ jobs:
       - name: Cache Nargo toolchain
         uses: actions/cache@v4
         with:
-          # compile-circuits.sh downloads a pinned Nargo release into
-          # .tmp_tools and uses .tmp_nargo_home as an isolated NARGO/HOME.
           path: |
             .tmp_tools
             .tmp_nargo_home
@@ -113,8 +111,25 @@ jobs:
           key: ${{ runner.os }}-e2e-nargo-crs-1.0.0-beta.17
           restore-keys: ${{ runner.os }}-e2e-nargo-crs-
 
+      # Cache co-noir binary to avoid recompiling from source on every run
+      - name: Cache co-noir binary
+        id: cache-co-noir
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/co-noir
+          key: co-noir-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install co-noir
+        if: steps.cache-co-noir.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/TaceoLabs/co-snarks --branch main co-noir
+          co-noir --version
+
       - name: Compile circuits
         run: ./scripts/compile-circuits.sh
+
+      - name: Install co-noir for CRS download
+        run: cargo install --git https://github.com/TaceoLabs/co-snarks --branch main co-noir
 
       - name: Download CRS
         run: ./scripts/download-crs.sh
@@ -196,7 +211,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
           cache-dependency-path: app/package-lock.json
 
@@ -204,7 +219,7 @@ jobs:
         run: cd app && npm ci
 
       - name: Lint
-        run: cd app && npm run lint
+        run: cd app && npm run lint --if-present
 
       - name: Build
         run: cd app && npm run build

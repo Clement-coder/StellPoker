@@ -4,25 +4,25 @@ import { FreighterMock } from "./mocks/freighter-mock";
 // Mock Stellar SDK
 vi.mock("@stellar/stellar-sdk", () => ({
   rpc: {
-    Server: vi.fn().mockImplementation(() => ({
-      getAccount: vi.fn().mockResolvedValue({
+    Server: vi.fn().mockImplementation(function (this: any) {
+      this.getAccount = vi.fn().mockResolvedValue({
         accountId: "GABCDEFG...",
         sequenceNumber: "123456789",
-      }),
-      simulateTransaction: vi.fn().mockResolvedValue({
+      });
+      this.simulateTransaction = vi.fn().mockResolvedValue({
         minResourceFee: "1000000", // 0.1 XLM
         cost: { cpuInsns: "50000" },
         results: [{ xdr: "base64_result" }],
-      }),
-      prepareTransaction: vi.fn().mockImplementation((tx) => tx),
-      sendTransaction: vi.fn().mockResolvedValue({
+      });
+      this.prepareTransaction = vi.fn().mockImplementation((tx) => tx);
+      this.sendTransaction = vi.fn().mockResolvedValue({
         status: "SUCCESS",
         hash: "abcd1234",
-      }),
-      pollTransaction: vi.fn().mockResolvedValue({
+      });
+      this.pollTransaction = vi.fn().mockResolvedValue({
         status: "SUCCESS",
-      }),
-    })),
+      });
+    }),
     Api: {
       GetTransactionStatus: {
         SUCCESS: "SUCCESS",
@@ -30,17 +30,20 @@ vi.mock("@stellar/stellar-sdk", () => ({
       },
     },
   },
-  TransactionBuilder: vi.fn().mockImplementation(() => ({
-    addOperation: vi.fn().mockReturnThis(),
-    setTimeout: vi.fn().mockReturnThis(),
-    build: vi.fn().mockReturnValue({
+  TransactionBuilder: vi.fn().mockImplementation(function (this: any) {
+    this.addOperation = vi.fn().mockReturnThis();
+    this.setTimeout = vi.fn().mockReturnThis();
+    this.build = vi.fn().mockReturnValue({
       toXDR: vi.fn().mockReturnValue("mock_tx_xdr"),
-    }),
-  })),
-  Contract: vi.fn(),
-  Address: vi.fn().mockImplementation((addr) => ({
-    toScVal: vi.fn().mockReturnValue(`scval_${addr}`),
-  })),
+    });
+  }),
+  Contract: vi.fn().mockImplementation(function (this: any) {
+    this.call = vi.fn().mockReturnValue("mock_operation");
+  }),
+  Address: class AddressMock {
+    constructor(private addr: string) {}
+    toScVal = vi.fn().mockImplementation(() => `scval_${this.addr}`);
+  },
   nativeToScVal: vi.fn().mockImplementation((val, opts) => `scval_${val}_${opts?.type}`),
   BASE_FEE: "100000",
   xdr: {
@@ -76,6 +79,8 @@ describe("Transaction Simulation Integration Tests", () => {
   afterEach(() => {
     freighterMock.uninstall();
     vi.doUnmock("../lib/api");
+    vi.doUnmock("../lib/transaction-simulation");
+    vi.doUnmock("../lib/onchain");
   });
 
   describe("Transaction Simulation", () => {

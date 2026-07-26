@@ -1,6 +1,7 @@
 "use client";
 
 import { Card } from "./Card";
+import { stellarExpertUrl } from "@/lib/explorer";
 import type { HandHistoryEntry, Street } from "@/lib/hand-history";
 
 interface HandHistoryPanelProps {
@@ -122,7 +123,7 @@ export function HandHistoryPanel({ open, onClose, entries }: HandHistoryPanelPro
 
               {entry.txHash && (
                 <a
-                  href={`https://stellar.expert/explorer/testnet/tx/${entry.txHash}`}
+                  href={stellarExpertUrl("tx", entry.txHash)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[8px]"

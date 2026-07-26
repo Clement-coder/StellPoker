@@ -1,0 +1,89 @@
+name: Bug Report
+description: Report a bug or unexpected behaviour in StellPoker
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in as much detail as you can so we can reproduce and fix it quickly.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear and concise description of what the bug is.
+      placeholder: What went wrong?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Exact steps that reliably reproduce the issue.
+      placeholder: |
+        1. Start the local stack with `docker-compose up`
+        2. Open http://localhost:3000
+        3. Click '...'
+        4. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behaviour
+      description: What actually happened? Include any error messages shown in the UI.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs
+      description: |
+        Paste any relevant logs here (container logs, browser console, Rust panics, etc.).
+        Tip: `docker-compose logs -f <service>` to tail a service.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: Git commit SHA or release tag where you observed the bug.
+      placeholder: e.g. 6ab2c85 or v0.3.1
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      options:
+        - Frontend (Next.js app)
+        - Coordinator service
+        - MPC node
+        - Soroban contracts
+        - ZK circuits
+        - stellar-zk-cards library
+        - Infrastructure / docker-compose
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, browser (if frontend), Rust/Node toolchain versions.
+      placeholder: |
+        OS: Ubuntu 22.04
+        Browser: Chrome 125
+        Rust: 1.78.0
+        Node: 20.12.0

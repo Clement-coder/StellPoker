@@ -48,7 +48,7 @@ pub fn verify_shplemini(
     let shifted = gemini_r_inv * (pos0 - tp.shplonk_nu * neg0);
     // 4) shplonk_Q
     scalars[0] = Fr::one();
-    coms[0] = proof.shplonk_q.clone();
+    coms[0] = proof.shplonk_q;
 
     // 5) weight sumcheck evals
     let mut rho_pow = Fr::one();
@@ -75,7 +75,7 @@ pub fn verify_shplemini(
         let mut j = 1;
         macro_rules! push {
             ($f:ident) => {{
-                coms[j] = vk.$f.clone();
+                coms[j] = vk.$f;
                 j += 1;
             }};
         }
@@ -110,32 +110,32 @@ pub fn verify_shplemini(
         push!(lagrange_first);
         push!(lagrange_last);
 
-        coms[j] = proof.w1.clone();
+        coms[j] = proof.w1;
         j += 1;
-        coms[j] = proof.w2.clone();
+        coms[j] = proof.w2;
         j += 1;
-        coms[j] = proof.w3.clone();
+        coms[j] = proof.w3;
         j += 1;
-        coms[j] = proof.w4.clone();
+        coms[j] = proof.w4;
         j += 1;
-        coms[j] = proof.z_perm.clone();
+        coms[j] = proof.z_perm;
         j += 1;
-        coms[j] = proof.lookup_inverses.clone();
+        coms[j] = proof.lookup_inverses;
         j += 1;
-        coms[j] = proof.lookup_read_counts.clone();
+        coms[j] = proof.lookup_read_counts;
         j += 1;
-        coms[j] = proof.lookup_read_tags.clone();
+        coms[j] = proof.lookup_read_tags;
         j += 1;
 
-        coms[j] = proof.w1.clone();
+        coms[j] = proof.w1;
         j += 1;
-        coms[j] = proof.w2.clone();
+        coms[j] = proof.w2;
         j += 1;
-        coms[j] = proof.w3.clone();
+        coms[j] = proof.w3;
         j += 1;
-        coms[j] = proof.w4.clone();
+        coms[j] = proof.w4;
         j += 1;
-        coms[j] = proof.z_perm.clone();
+        coms[j] = proof.z_perm;
         j += 1;
         let _ = j; // silence "assigned but never read" in non-trace builds
     }
@@ -174,12 +174,12 @@ pub fn verify_shplemini(
 
         v_pow = v_pow * tp.shplonk_nu * tp.shplonk_nu;
 
-        coms[base + j - 1] = proof.gemini_fold_comms[j - 1].clone();
+        coms[base + j - 1] = proof.gemini_fold_comms[j - 1];
     }
 
     // Fill remaining (dummy) fold commitments so MSM layout matches Solidity (total 27 entries)
     for i in (log_n - 1)..(CONST_PROOF_SIZE_LOG_N - 1) {
-        coms[base + i] = proof.gemini_fold_comms[i].clone();
+        coms[base + i] = proof.gemini_fold_comms[i];
     }
 
     // 10) add generator
@@ -192,7 +192,7 @@ pub fn verify_shplemini(
     // 11) add quotient
     let q_idx = one_idx + 1;
     trace!("q_idx = {}", q_idx);
-    coms[q_idx] = proof.kzg_quotient.clone();
+    coms[q_idx] = proof.kzg_quotient;
     scalars[q_idx] = tp.shplonk_z;
 
     // 12) MSM + pairing

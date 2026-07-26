@@ -1,0 +1,16 @@
+environment                 = "staging"
+project_name                = "stellpoker-staging"
+aws_region                  = "us-east-1"
+coordinator_container_image = "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/coordinator:staging"
+mpc_node_container_image    = "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/mpc-node:staging"
+db_password                 = "CHANGE_ME"
+
+# Mirror production topology with reduced cost where acceptable.
+coordinator_desired_count = 2
+mpc_node_count            = 3
+enable_monitoring         = true
+enable_cdn                = true
+rds_multi_az              = true
+
+# Fill these in with staging alert targets and networking choices.
+alarm_email = "ops-staging@example.com"

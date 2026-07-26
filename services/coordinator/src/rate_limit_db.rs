@@ -5,7 +5,6 @@
 //! Persist configuration to database.
 
 use sqlx::PgPool;
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, sqlx::FromRow)]

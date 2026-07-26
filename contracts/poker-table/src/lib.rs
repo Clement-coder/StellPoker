@@ -4,15 +4,22 @@
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, Symbol, Vec};
 
 mod betting;
+mod constant_time;
 mod game;
 mod game_hub;
+#[cfg(test)]
+mod gas_regression_test;
 #[cfg(test)]
 mod invariants_test;
 #[cfg(test)]
 mod lifecycle_invariants_test;
 mod pot;
+#[cfg(test)]
+mod state_machine_test;
 mod test;
 mod timeout;
+#[cfg(test)]
+mod tournament_lifecycle_test;
 mod types;
 mod verifier;
 
@@ -103,7 +110,9 @@ fn verify_hole_cards_against_proof(
         let (submitted_c1, submitted_c2) = hole_cards
             .get(active_idx)
             .ok_or(PokerTableError::InvalidHoleCards)?;
-        if proof_c1 != submitted_c1 || proof_c2 != submitted_c2 {
+        if constant_time::u32_ne(proof_c1, submitted_c1)
+            || constant_time::u32_ne(proof_c2, submitted_c2)
+        {
             return Err(PokerTableError::HoleCardMismatch);
         }
         active_idx += 1;
@@ -169,6 +178,7 @@ impl PokerTableContract {
             committee: config.committee,
             session_id: 0,
             rake_balance: 0,
+            action_deadline: 0,
         };
 
         save_table(&env, &table);
@@ -210,7 +220,7 @@ impl PokerTableContract {
                 .players
                 .get(i)
                 .ok_or(PokerTableError::InvalidPlayerIndex)?;
-            if p.address == player {
+            if constant_time::address_eq(&env, &p.address, &player) {
                 return Err(PokerTableError::AlreadySeated);
             }
         }
@@ -262,7 +272,7 @@ impl PokerTableContract {
                 .players
                 .get(i)
                 .ok_or(PokerTableError::InvalidPlayerIndex)?;
-            if p.address == player {
+            if constant_time::address_eq(&env, &p.address, &player) {
                 found = true;
                 withdrawn = p.stack;
                 if withdrawn > 0 {
@@ -354,7 +364,7 @@ impl PokerTableContract {
         if !matches!(table.phase, GamePhase::Dealing) {
             return Err(PokerTableError::NotInDealingPhase);
         }
-        if committee != table.committee {
+        if constant_time::address_ne(&env, &committee, &table.committee) {
             return Err(PokerTableError::NotAuthorizedCommittee);
         }
         if hand_commitments.len() != table.players.len() {
@@ -379,6 +389,8 @@ impl PokerTableContract {
             return Err(PokerTableError::NotEnoughPlayers);
         }
         table.current_turn = (table.dealer_seat + 3) % num_players;
+        // Set action deadline for the first player to act
+        table.action_deadline = env.ledger().sequence() + table.config.timeout_ledgers;
 
         save_table(&env, &table);
 
@@ -430,7 +442,7 @@ impl PokerTableContract {
 
         let mut table = load_table(&env, table_id)?;
 
-        if committee != table.committee {
+        if constant_time::address_ne(&env, &committee, &table.committee) {
             return Err(PokerTableError::NotAuthorizedCommittee);
         }
 
@@ -507,7 +519,7 @@ impl PokerTableContract {
         if !matches!(table.phase, GamePhase::Showdown) {
             return Err(PokerTableError::NotInShowdownPhase);
         }
-        if committee != table.committee {
+        if constant_time::address_ne(&env, &committee, &table.committee) {
             return Err(PokerTableError::NotAuthorizedCommittee);
         }
 
@@ -568,6 +580,28 @@ impl PokerTableContract {
         let mut table = load_table(&env, table_id)?;
 
         timeout::process_timeout(&env, &mut table, &claimer)?;
+
+        save_table(&env, &table);
+        Ok(())
+    }
+
+    /// Force-fold a stalling player after the action deadline has passed.
+    ///
+    /// Any seated player may call this once the `action_deadline` ledger has
+    /// been reached. The target player (must be the current turn) is folded
+    /// and the deadline is reset for the next active player.
+    pub fn force_fold(
+        env: Env,
+        table_id: u32,
+        caller: Address,
+        target_seat: u32,
+    ) -> Result<(), PokerTableError> {
+        caller.require_auth();
+        require_not_paused(&env, table_id)?;
+
+        let mut table = load_table(&env, table_id)?;
+
+        timeout::force_fold(&env, &mut table, &caller, target_seat)?;
 
         save_table(&env, &table);
         Ok(())

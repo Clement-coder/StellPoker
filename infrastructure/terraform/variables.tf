@@ -194,6 +194,42 @@ variable "enable_alb" {
   default     = true
 }
 
+# TLS termination for public API gateway (ALB)
+variable "acm_certificate_arn" {
+  description = "ACM certificate ARN for ALB HTTPS listener"
+  type        = string
+  default     = ""
+}
+
+# WAF (rate limiting, IP allowlisting)
+variable "enable_waf" {
+  description = "Enable AWS WAFv2 Web ACL for coordinator"
+  type        = bool
+  default     = true
+}
+
+variable "waf_allowed_ips" {
+  description = "Allowed IPv4 CIDRs for public API access (WAF IP set). Empty => deny all."
+  type        = list(string)
+  default     = []
+}
+
+# WAF rate limit threshold (requests per 5-minute interval as per AWS rate-based statement)
+variable "waf_rate_limit_requests" {
+  description = "WAF rate limit per IP (requests per 5 minutes)"
+  type        = number
+  default     = 300
+}
+
+# AWS Shield (DDoS)
+variable "enable_shield" {
+  description = "Enable AWS Shield protection for ALB"
+  type        = bool
+  default     = true
+}
+
+
+
 variable "alb_health_check_path" {
   description = "ALB health check path"
   type        = string

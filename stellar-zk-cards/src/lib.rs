@@ -255,9 +255,9 @@ pub fn evaluate_hand(cards: &[u32; 7]) -> HandRank {
             // Skip cards at indices i and j (use the other 5)
             let mut hand = [0u32; 5];
             let mut idx = 0;
-            for k in 0..7 {
+            for (k, card) in cards.iter().enumerate().take(7) {
                 if k != i && k != j {
-                    hand[idx] = cards[k];
+                    hand[idx] = *card;
                     idx += 1;
                 }
             }

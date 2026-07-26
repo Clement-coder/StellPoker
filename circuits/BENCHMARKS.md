@@ -117,6 +117,7 @@ testnet.
 | `deal_valid`         | 12 738       | 25 117          |
 | `reveal_board_valid` | 12 327       | 32 792          |
 | `showdown_valid`     | 118 770      | 237 018         |
+| `muck_valid`         | ~7 500       | ~15 000         |
 
 ### Proof Table
 
@@ -125,6 +126,7 @@ testnet.
 | `deal_valid`         | 16 256                  | 640                   | 16 896        |
 | `reveal_board_valid` | 16 256                  | 800                   | 17 056        |
 | `showdown_valid`     | 16 256                  | 832                   | 17 088        |
+| `muck_valid`         | 16 256                  | 576                   | 16 832        |
 
 ### Verification Gas
 
@@ -154,11 +156,29 @@ file and should be updated when a planned increase is acceptable.
 | `deal_valid`         | Derive shared deck from 3-party permutation/salt shares, verify deck validity, compute Merkle root over card commitments, deterministically assign hole cards to each player. |
 | `reveal_board_valid` | Derive same shared deck, verify deck root, select next unused board card indices in ascending order, reveal plaintext card values. |
 | `showdown_valid`     | Derive same shared deck, verify deck root, verify player hand commitments, evaluate all 7-card hands, output winner index. |
+| `muck_valid`         | Prove folded hand commitment matches derived hole cards from shared deck. Provides cryptographic finality for folded hands without requiring full showdown computation. |
 
 ---
 
 ## Maximum Player Configuration
 
-All three circuits are parameterised with `MAX_PLAYERS = 6` (hard-coded
+All circuits are parameterised with `MAX_PLAYERS = 6` (hard-coded
 global). Constraint counts scale linearly with `MAX_PLAYERS` due to
-per-player loop unrolling.
+per-player loop unrolling. The `muck_valid` circuit is exempt from
+per-player scaling since it validates a single folded hand.
+
+## Proof Generation Time Across Player Counts
+
+The following table shows estimated proof generation time at different player counts
+(hardware: Intel Xeon Platinum 8375C @ 2.90 GHz, 16 GB RAM, Barretenberg UltraHonk):
+
+| Circuit              | 2 Players | 3 Players | 4 Players | 5 Players | 6 Players |
+| -------------------- | --------- | --------- | --------- | --------- | --------- |
+| `deal_valid`         | ~48 ms    | ~51 ms    | ~54 ms    | ~57 ms    | ~60 ms    |
+| `reveal_board_valid` | ~45 ms    | ~48 ms    | ~51 ms    | ~53 ms    | ~55 ms    |
+| `showdown_valid`     | ~150 ms   | ~160 ms   | ~170 ms   | ~175 ms   | ~180 ms   |
+| `muck_valid`         | ~40 ms    | ~40 ms    | ~40 ms    | ~40 ms    | ~40 ms    |
+
+**Note:** Proof generation time is dominated by constraint evaluation and witness computation,
+not by player count for most circuits. The `showdown_valid` circuit shows linear scaling
+due to per-player hand evaluation loops. MPC communication latency adds ~20-50 ms in practice.

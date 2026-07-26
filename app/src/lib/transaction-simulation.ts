@@ -93,10 +93,11 @@ function toActionScVal(action: BettingAction, amount?: number): xdr.ScVal {
 
 function parseStateChanges(simulation: rpc.Api.SimulateTransactionResponse): StateChange[] {
   const changes: StateChange[] = [];
+  const sim = simulation as any;
 
   // Parse fee
-  if (simulation.minResourceFee) {
-    const feeXLM = (BigInt(simulation.minResourceFee) / BigInt(10_000_000)).toString();
+  if (sim.minResourceFee) {
+    const feeXLM = (Number(sim.minResourceFee) / 10_000_000).toString();
     changes.push({
       type: 'balance',
       description: `Transaction fee: ${feeXLM} XLM`,
@@ -104,16 +105,14 @@ function parseStateChanges(simulation: rpc.Api.SimulateTransactionResponse): Sta
   }
 
   // Parse contract data changes from ledger entry changes
-  if (simulation.results?.[0]?.xdr) {
-    try {
-      const result = xdr.SorobanTransactionResult.fromXDR(simulation.results[0].xdr, 'base64');
-      changes.push({
-        type: 'contract_data',
-        description: 'Contract state will be updated',
-      });
-    } catch (e) {
-      // Ignore parsing errors
-    }
+  if (
+    (sim.results && sim.results[0] && sim.results[0].xdr) ||
+    (sim.stateChanges && sim.stateChanges.length > 0)
+  ) {
+    changes.push({
+      type: 'contract_data',
+      description: 'Contract state will be updated',
+    });
   }
 
   // Parse account sequence changes
@@ -145,24 +144,25 @@ async function simulateTransaction(
       .build();
 
     const simulation = await server.simulateTransaction(tx);
+    const sim = simulation as any;
 
-    if (simulation.error) {
+    if (sim.error) {
       return {
         success: false,
         fee: "0",
         stateChanges: [],
-        error: simulation.error,
+        error: sim.error,
         rawResult: simulation,
       };
     }
 
-    const fee = (BigInt(simulation.minResourceFee || "0") / BigInt(10_000_000)).toString();
+    const fee = (Number(sim.minResourceFee || "0") / 10_000_000).toString();
     const stateChanges = parseStateChanges(simulation);
 
     return {
       success: true,
       fee,
-      gasUsed: simulation.cost?.cpuInsns ? parseInt(simulation.cost.cpuInsns) : undefined,
+      gasUsed: sim.cost?.cpuInsns ? parseInt(sim.cost.cpuInsns) : undefined,
       stateChanges,
       rawResult: simulation,
     };

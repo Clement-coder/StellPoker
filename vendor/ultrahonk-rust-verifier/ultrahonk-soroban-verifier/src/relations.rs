@@ -11,7 +11,7 @@ fn wire(vals: &[Fr], w: Wire) -> Fr {
 
 #[inline(always)]
 fn neg_half() -> Fr {
-    Fr::from_str("0x183227397098d014dc2822db40c0ac2e9419f4243cdcb848a1f0fac9f8000000")
+    Fr::from_hex("0x183227397098d014dc2822db40c0ac2e9419f4243cdcb848a1f0fac9f8000000")
 }
 
 #[inline(always)]
@@ -21,7 +21,7 @@ fn curve_b() -> Fr {
 
 #[inline(always)]
 fn limb_size() -> Fr {
-    Fr::from_str("0x100000000000000000")
+    Fr::from_hex("0x100000000000000000")
 }
 
 #[inline(always)]
@@ -32,10 +32,10 @@ fn sublimb_shift() -> Fr {
 #[inline(always)]
 fn internal_matrix_diagonal() -> [Fr; 4] {
     [
-        Fr::from_str("0x10dc6e9c006ea38b04b1e03b4bd9490c0d03f98929ca1d7fb56821fd19d3b6e7"),
-        Fr::from_str("0x0c28145b6a44df3e0149b3d0a30b3bb599df9756d4dd9b84a86b38cfb45a740b"),
-        Fr::from_str("0x00544b8338791518b2c7645a50392798b21f75bb60e3596170067d00141cac15"),
-        Fr::from_str("0x222c01175718386f2e2e82eb122789e352e105a3b8fa852613bc534433ee428b"),
+        Fr::from_hex("0x10dc6e9c006ea38b04b1e03b4bd9490c0d03f98929ca1d7fb56821fd19d3b6e7"),
+        Fr::from_hex("0x0c28145b6a44df3e0149b3d0a30b3bb599df9756d4dd9b84a86b38cfb45a740b"),
+        Fr::from_hex("0x00544b8338791518b2c7645a50392798b21f75bb60e3596170067d00141cac15"),
+        Fr::from_hex("0x222c01175718386f2e2e82eb122789e352e105a3b8fa852613bc534433ee428b"),
     ]
 }
 

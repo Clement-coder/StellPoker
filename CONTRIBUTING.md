@@ -165,6 +165,34 @@ DELETE /api/node/{id}            # graceful deregister on shutdown
 A node is considered unhealthy once it has gone 30s without a heartbeat. Check
 the active committee any time with `GET /api/committee/status`.
 
+## Git Blame and Formatting Commits
+
+This repository keeps a `.git-blame-ignore-revs` file that lists commits that
+were purely formatting or refactoring changes (e.g. `cargo fmt`, `prettier`,
+whitespace fixes). Configuring git to use it means `git blame` skips those
+commits and points straight to the last meaningful change.
+
+**One-time setup (per clone):**
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+After that, `git blame` and editor integrations that rely on it (GitLens, etc.)
+will automatically ignore formatting-only commits.
+
+**Adding a formatting commit to the file:**
+
+If your PR is a pure formatting/refactoring change, add its full SHA to
+`.git-blame-ignore-revs` with a short comment explaining what it was:
+
+```
+# 2024-xx-xx — run cargo fmt across workspace
+abcdef1234567890abcdef1234567890abcdef12
+```
+
+The SHA must be the full 40-character commit hash (available after merging).
+
 ## Reporting Issues
 
 Open a GitHub issue with steps to reproduce, expected behaviour, and actual behaviour.

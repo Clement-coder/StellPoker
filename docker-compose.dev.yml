@@ -1,0 +1,84 @@
+
+x-json-logging: &json-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "100m"
+      max-file: "3"
+
+services:
+  # Soroban local network
+  soroban:
+    image: stellar/quickstart:latest
+    command: --local --enable-soroban-rpc
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000 || (echo 'WARN: soroban health check failed' >&2; exit 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    <<: *json-logging
+
+  # Single MPC Node (Party 0)
+  mpc-node-0:
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "0"
+      PORT: "8101"
+      MPC_PORT: "10000"
+      PARTY_CONFIG: "/app/config/party_0.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+      REQUEST_LOG_FORMAT: "json"
+    ports:
+      - "8101:8101"
+      - "10000:10000"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8101/health || (echo 'WARN: mpc-node-0 health check failed' >&2; exit 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    <<: *json-logging
+
+  # Coordinator
+  coordinator:
+    build:
+      context: .
+      dockerfile: services/coordinator/Dockerfile
+    env_file:
+      - path: .env.local
+        required: false
+    environment:
+      MPC_NODE_0: "http://mpc-node-0:8101"
+      # Removed MPC_NODE_1 and MPC_NODE_2
+      SOROBAN_RPC: "http://soroban:8000/soroban/rpc"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+      BIND_ADDR: "0.0.0.0:8080"
+      REQUEST_LOG_FORMAT: "json"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+    depends_on:
+      soroban:
+        condition: service_healthy
+      mpc-node-0:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/api/health || (echo 'WARN: coordinator health check failed' >&2; exit 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    <<: *json-logging

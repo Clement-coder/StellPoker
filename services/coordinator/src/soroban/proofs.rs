@@ -21,6 +21,15 @@ pub async fn submit_deal_proof(
         return Ok(String::new());
     }
 
+    // Issue #108: content-addressable cache of already-verified proofs, so a
+    // retried submission of byte-identical proof data skips the (expensive)
+    // on-chain re-verification and just replays the prior tx hash.
+    let cache_key = crate::proof_cache::proof_key(proof, public_inputs);
+    if let Some(tx_hash) = crate::proof_cache::get(&cache_key).await {
+        tracing::info!("Deal proof cache hit — skipping redundant on-chain verification");
+        return Ok(tx_hash);
+    }
+
     maybe_start_hand_for_deal(config, table_id).await?;
 
     let onchain_table_id = resolve_onchain_table_id(config, table_id);
@@ -63,7 +72,9 @@ pub async fn submit_deal_proof(
     )
     .await?;
 
-    parse_tx_result(output)
+    let tx_hash = parse_tx_result(output)?;
+    crate::proof_cache::insert(cache_key, tx_hash.clone()).await;
+    Ok(tx_hash)
 }
 
 async fn maybe_start_hand_for_deal(config: &SorobanConfig, table_id: u32) -> Result<(), String> {
@@ -119,6 +130,12 @@ pub async fn submit_reveal_proof(
         return Ok(String::new());
     }
 
+    let cache_key = crate::proof_cache::proof_key(proof, public_inputs);
+    if let Some(tx_hash) = crate::proof_cache::get(&cache_key).await {
+        tracing::info!("Reveal proof cache hit — skipping redundant on-chain verification");
+        return Ok(tx_hash);
+    }
+
     let onchain_table_id = resolve_onchain_table_id(config, table_id);
     let committee_addr = config.committee_address()?;
     let converted_proof = convert_keccak_proof_to_soroban(proof)?;
@@ -149,7 +166,9 @@ pub async fn submit_reveal_proof(
     )
     .await?;
 
-    parse_tx_result(output)
+    let tx_hash = parse_tx_result(output)?;
+    crate::proof_cache::insert(cache_key, tx_hash.clone()).await;
+    Ok(tx_hash)
 }
 
 /// Submit a showdown proof to the on-chain poker-table contract via `submit_showdown`.
@@ -163,6 +182,12 @@ pub async fn submit_showdown_proof(
     if !config.is_configured() {
         tracing::warn!("Soroban not configured, skipping showdown proof submission");
         return Ok(String::new());
+    }
+
+    let cache_key = crate::proof_cache::proof_key(proof, public_inputs);
+    if let Some(tx_hash) = crate::proof_cache::get(&cache_key).await {
+        tracing::info!("Showdown proof cache hit — skipping redundant on-chain verification");
+        return Ok(tx_hash);
     }
 
     let onchain_table_id = resolve_onchain_table_id(config, table_id);
@@ -193,7 +218,9 @@ pub async fn submit_showdown_proof(
     )
     .await?;
 
-    parse_tx_result(output)
+    let tx_hash = parse_tx_result(output)?;
+    crate::proof_cache::insert(cache_key, tx_hash.clone()).await;
+    Ok(tx_hash)
 }
 
 /// Convert co-noir keccak proof format to the Soroban/BB UltraHonk verifier format.
@@ -394,8 +421,7 @@ fn convert_keccak_proof_to_soroban(proof_bytes: &[u8]) -> Result<Vec<u8>, String
 /// This is needed because Soroban `BytesN<32>` expects hex-encoded bytes, but
 /// MPC proof outputs are decimal field element strings.
 fn field_to_bytes32_hex(field_str: &str) -> Result<String, String> {
-    let fr = Fr::from_str(field_str)
-        .map_err(|_| format!("failed to parse field element: '{}'", field_str))?;
+    let fr = Fr::from_hex(field_str);
     let bytes = fr.into_bigint().to_bytes_be();
     // Pad to exactly 32 bytes (should already be, but be safe)
     if bytes.len() > 32 {
@@ -420,7 +446,7 @@ fn fields_to_bytes32_json(fields: &[String]) -> Result<String, String> {
 fn public_inputs_to_hex(public_inputs: &[String]) -> Result<String, String> {
     let mut all_bytes = Vec::with_capacity(public_inputs.len() * 32);
     for pi in public_inputs {
-        let fr = Fr::from_str(pi).map_err(|_| format!("failed to parse public input: '{}'", pi))?;
+        let fr = Fr::from_hex(pi);
         let bytes = fr.into_bigint().to_bytes_be();
         let mut padded = vec![0u8; 32 - bytes.len()];
         padded.extend_from_slice(&bytes);

@@ -1,27 +1,34 @@
 #!/usr/bin/env bash
-# Download BN254 CRS files required by co-noir for UltraHonk proof generation.
-#
-# Prerequisites:
-#   cargo install --git https://github.com/TaceoLabs/co-snarks --branch main co-noir
-#
-# Usage:
-#   ./scripts/download-crs.sh [output_dir]
-
+# Download CRS for circuits with caching (Issue #92)
 set -euo pipefail
 
-CRS_DIR="${1:-./crs}"
-
-echo "=== Downloading BN254 CRS files ==="
-echo "Output directory: ${CRS_DIR}"
+CRS_DIR="${CRS_DIR:-./.crs}"
+CRS_URL="https://aztec-ignition.s3.amazonaws.com/MAIN%20IGNITION/sealed/transcript00.dat"
+CRS_FILE="${CRS_DIR}/bn254_g1.dat"
+CRS_EXPECTED_HASH="c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
 
 mkdir -p "${CRS_DIR}"
 
-# co-noir download-crs fetches the BN254 SRS points file
-# --crs specifies the output file path, --num-points how many G1 points to download
-co-noir download-crs --crs "${CRS_DIR}/bn254_g1.dat" --num-points 4194304
+if [ -f "${CRS_FILE}" ]; then
+  existing_hash=$(sha256sum "${CRS_FILE}" | cut -d' ' -f1)
+  if [ "${existing_hash}" = "${CRS_EXPECTED_HASH}" ]; then
+    echo "CRS already downloaded and verified: ${CRS_FILE}"
+    exit 0
+  fi
+  echo "CRS hash mismatch, re-downloading..."
+fi
 
-echo ""
-echo "=== CRS files downloaded ==="
-ls -lh "${CRS_DIR}"/*.dat 2>/dev/null || echo "Warning: no .dat files found in ${CRS_DIR}"
-echo ""
-echo "Done. CRS files are ready for MPC proof generation."
+echo "Downloading CRS from ${CRS_URL}..."
+curl -fSL --progress-bar -o "${CRS_FILE}.tmp" "${CRS_URL}"
+
+downloaded_hash=$(sha256sum "${CRS_FILE}.tmp" | cut -d' ' -f1)
+if [ "${downloaded_hash}" != "${CRS_EXPECTED_HASH}" ]; then
+  echo "ERROR: Downloaded CRS hash mismatch"
+  echo "Expected: ${CRS_EXPECTED_HASH}"
+  echo "Got:      ${downloaded_hash}"
+  rm -f "${CRS_FILE}.tmp"
+  exit 1
+fi
+
+mv "${CRS_FILE}.tmp" "${CRS_FILE}"
+echo "CRS downloaded and verified: ${CRS_FILE}"

@@ -15,9 +15,27 @@ docker-compose up -d
 python3 scripts/test-flow.py
 ```
 
+To run the real circuit-sequencing integration test for Noir/Barretenberg:
+
+```bash
+python3 -m unittest tests.test_circuit_sequence
+```
+
 Or against testnet:
 ```bash
 NETWORK=testnet python3 scripts/test-flow.py
+```
+
+Or against the checked-in staging environment:
+```bash
+TEST_ENV_FILE=.env.staging \
+COORDINATOR_URL=$(grep '^NEXT_PUBLIC_COORDINATOR_URL=' .env.staging | cut -d= -f2-) \
+python3 scripts/test-flow.py
+```
+
+For the full staging smoke path, use:
+```bash
+./scripts/run-staging-checks.sh
 ```
 
 ## Coverage

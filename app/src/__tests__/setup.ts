@@ -12,7 +12,7 @@ vi.stubGlobal("localStorage", {
 
 // Mock window for server-side rendering checks
 Object.defineProperty(globalThis, "window", {
-  value: { ...globalThis.window },
+  value: Object.create(globalThis.window || {}),
   writable: true,
   configurable: true,
 });

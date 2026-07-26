@@ -147,6 +147,53 @@ EOF
     echo "  Node $i: TLS credentials generated in $DATA_DIR"
 done
 
+# 4b. Generate Coordinator TLS client certificate (used for mTLS pinning)
+echo "Generating coordinator TLS client certificate..."
+COORDINATOR_KEY_OUT="${DATA_DIR}/coordinator_key.der"
+COORDINATOR_CERT_OUT="${DATA_DIR}/coordinator_cert.der"
+
+openssl ecparam -name prime256v1 -genkey -noout -out "${TEMP_DIR}/coordinator_key.pem" 2>/dev/null
+openssl ec -in "${TEMP_DIR}/coordinator_key.pem" -outform DER -out "${COORDINATOR_KEY_OUT}" 2>/dev/null
+
+cat > "${TEMP_DIR}/coordinator_cert.conf" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = stellpoker-coordinator
+
+[v3_req]
+basicConstraints = critical, CA:FALSE
+keyUsage = digitalSignature
+extendedKeyUsage = clientAuth
+EOF
+
+openssl req -new -x509 \
+    -key "${TEMP_DIR}/coordinator_key.pem" \
+    -sha256 -days 365 \
+    -config "${TEMP_DIR}/coordinator_cert.conf" \
+    -outform DER -out "${COORDINATOR_CERT_OUT}" 2>/dev/null
+
+chmod 600 "${COORDINATOR_KEY_OUT}"
+chmod 644 "${COORDINATOR_CERT_OUT}"
+
+# Compute SPKI hash (SHA-256 of SubjectPublicKeyInfo DER) for coordinator cert
+# openssl x509 -noout -pubkey outputs the SPKI in PEM; we DER-encode and hash it.
+COORDINATOR_SPKI_HASH=$(openssl x509 \
+    -inform DER \
+    -in "${COORDINATOR_CERT_OUT}" \
+    -noout -pubkey 2>/dev/null | \
+    openssl pkey -pubin -outform DER 2>/dev/null | \
+    openssl dgst -sha256 -hex 2>/dev/null | \
+    awk '{print $2}')
+
+echo "  Coordinator client cert: ${COORDINATOR_CERT_OUT}"
+echo "  Coordinator private key: ${COORDINATOR_KEY_OUT}"
+echo "  Coordinator SPKI SHA-256: ${COORDINATOR_SPKI_HASH}"
+
+
 # 5. Generate Node Config TOMLs
 mkdir -p "$CONFIG_DIR"
 echo "Generating node config TOML files..."
@@ -258,4 +305,29 @@ stellar contract invoke \
 echo ""
 echo "=== Setup Complete ==="
 echo "You can now run: ./scripts/start-local.sh"
+echo ""
+echo "--- mTLS Certificate Pinning (optional but recommended) ---"
+echo ""
+echo "To enable coordinator TLS certificate pinning on the MPC nodes, add these"
+echo "environment variables to your node container / docker-compose service:"
+echo ""
+echo "  # Node server TLS (nodes serve HTTPS):"
+echo "  TLS_SERVER_CERT_PATH=services/node/data/cert0.der   # (cert1/cert2 for nodes 1/2)"
+echo "  TLS_SERVER_KEY_PATH=services/node/data/key0.der     # (key1/key2  for nodes 1/2)"
+echo ""
+echo "  # Coordinator certificate pin (nodes accept only THIS coordinator):"
+echo "  COORDINATOR_TLS_PIN_PUBKEY_HASH=${COORDINATOR_SPKI_HASH}"
+echo ""
+echo "  # Optional: also set on the coordinator so it presents its cert (mTLS):"
+echo "  COORDINATOR_CLIENT_CERT_PATH=services/node/data/coordinator_cert.der"
+echo "  COORDINATOR_CLIENT_KEY_PATH=services/node/data/coordinator_key.der"
+echo ""
+echo "  # Coordinator must also trust the node TLS certificates:"
+echo "  MPC_NODE_CERT_PATHS=services/node/data/cert0.der,services/node/data/cert1.der,services/node/data/cert2.der"
+echo ""
+echo "COORDINATOR_SPKI_HASH=${COORDINATOR_SPKI_HASH}" >> "${ENV_FILE}"
+echo "COORDINATOR_CLIENT_CERT_PATH=$(pwd)/${COORDINATOR_CERT_OUT}" >> "${ENV_FILE}"
+echo "COORDINATOR_CLIENT_KEY_PATH=$(pwd)/${COORDINATOR_KEY_OUT}" >> "${ENV_FILE}"
+echo "MPC_NODE_CERT_PATHS=$(pwd)/${DATA_DIR}/cert0.der,$(pwd)/${DATA_DIR}/cert1.der,$(pwd)/${DATA_DIR}/cert2.der" >> "${ENV_FILE}"
+echo "  (also appended to ${ENV_FILE})"
 echo ""

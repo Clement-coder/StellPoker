@@ -2,7 +2,8 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, Bytes, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, xdr::ToXdr, Address, Bytes, BytesN, Env,
+    Symbol, Vec,
 };
 use ultrahonk_soroban_verifier::{UltraHonkVerifier, PROOF_BYTES};
 
@@ -44,6 +45,26 @@ const REVEAL_BYTES: u32 = REVEAL_FIELD_COUNT * 32;
 
 const MAX_PLAYERS: u32 = 6;
 const BOARD_INDICES_COUNT: u32 = 5;
+
+fn ct_bytes32_eq(left: &BytesN<32>, right: &BytesN<32>) -> bool {
+    let left_arr = left.to_array();
+    let right_arr = right.to_array();
+    let mut diff = 0u8;
+    for i in 0..32 {
+        diff |= left_arr[i] ^ right_arr[i];
+    }
+    diff == 0
+}
+
+fn ct_address_eq(env: &Env, left: &Address, right: &Address) -> bool {
+    let left_hash: BytesN<32> = env.crypto().keccak256(&left.to_xdr(env)).into();
+    let right_hash: BytesN<32> = env.crypto().keccak256(&right.to_xdr(env)).into();
+    ct_bytes32_eq(&left_hash, &right_hash)
+}
+
+fn ct_u32_eq(left: u32, right: u32) -> bool {
+    (left ^ right) == 0
+}
 
 /// ZK Verifier contract for Stellar Poker.
 ///
@@ -110,7 +131,7 @@ impl ZkVerifierContract {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VerifierError::NotInitialized)?;
-        if admin != stored_admin {
+        if !ct_address_eq(&env, &admin, &stored_admin) {
             return Err(VerifierError::NotAdmin);
         }
         env.storage().instance().set(&StorageKey::Paused, &true);
@@ -128,7 +149,7 @@ impl ZkVerifierContract {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VerifierError::NotInitialized)?;
-        if admin != stored_admin {
+        if !ct_address_eq(&env, &admin, &stored_admin) {
             return Err(VerifierError::NotAdmin);
         }
         env.storage().instance().set(&StorageKey::Paused, &false);
@@ -159,7 +180,7 @@ impl ZkVerifierContract {
             .instance()
             .get(&StorageKey::Admin)
             .ok_or(VerifierError::NotInitialized)?;
-        if admin != stored_admin {
+        if !ct_address_eq(&env, &admin, &stored_admin) {
             return Err(VerifierError::NotAdmin);
         }
 
@@ -247,12 +268,12 @@ impl ZkVerifierContract {
     fn check_bytes32_field(public_inputs: &Bytes, field_index: u32, expected: &BytesN<32>) -> bool {
         let start = field_index * 32;
         let expected_arr = expected.to_array();
+        let mut diff = 0u8;
         for i in 0..32u32 {
-            if public_inputs.get(start + i) != Some(expected_arr[i as usize]) {
-                return false;
-            }
+            let actual = public_inputs.get(start + i).unwrap_or(0);
+            diff |= actual ^ expected_arr[i as usize];
         }
-        true
+        diff == 0
     }
 
     /// Extract a u32 from a BN254 field element at `field_index` in public_inputs.
@@ -269,7 +290,7 @@ impl ZkVerifierContract {
 
     /// Check that a u32 value matches the field element at `field_index`.
     fn check_u32_field(public_inputs: &Bytes, field_index: u32, expected: u32) -> bool {
-        Self::extract_u32_field(public_inputs, field_index) == expected
+        ct_u32_eq(Self::extract_u32_field(public_inputs, field_index), expected)
     }
 
     // ====================================================================
