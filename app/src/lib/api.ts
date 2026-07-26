@@ -55,6 +55,82 @@ export interface ParsedTableStateResponse {
   parsed: Record<string, unknown> | null;
 }
 
+/** Push payload from `GET /api/table/:table_id/state/ws` (Issue #105). */
+export interface GameStateEvent {
+  table_id: number;
+  phase: string;
+  deck_root: string;
+  board_indices: number[];
+  dealt_indices: number[];
+  deal_tx_hash: string | null;
+  reveal_tx_hashes: Record<string, string>;
+  showdown_tx_hash: string | null;
+  onchain_state: string | null;
+}
+
+/** Derives the coordinator's ws(s):// origin from its http(s):// base URL. */
+export function coordinatorWsBase(): string {
+  return COORDINATOR_API_BASE.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
+}
+
+export interface GameStateSocketHandle {
+  stop: () => void;
+}
+
+/**
+ * Subscribes to real-time game state pushes for a table. Reconnects with a
+ * fixed backoff on drop. Returns `null` if the browser has no WebSocket
+ * support at all — callers should fall back to polling `getParsedTableState`
+ * in that case (and generally keep a slower poll running regardless, as a
+ * safety net for missed/dropped messages).
+ */
+export function subscribeGameState(
+  tableId: number,
+  onUpdate: (event: GameStateEvent) => void
+): GameStateSocketHandle | null {
+  if (typeof WebSocket === "undefined") {
+    return null;
+  }
+
+  let active = true;
+  let ws: WebSocket | null = null;
+  let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
+
+  const connect = () => {
+    if (!active) return;
+    const wsUrl = `${coordinatorWsBase()}/api/table/${tableId}/state/ws`;
+    ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        onUpdate(JSON.parse(event.data) as GameStateEvent);
+      } catch {
+        // Ignore malformed frames.
+      }
+    };
+
+    ws.onclose = () => {
+      if (active) {
+        reconnectTimeout = setTimeout(connect, 3000);
+      }
+    };
+
+    ws.onerror = () => {
+      ws?.close();
+    };
+  };
+
+  connect();
+
+  return {
+    stop: () => {
+      active = false;
+      clearTimeout(reconnectTimeout);
+      ws?.close();
+    },
+  };
+}
+
 export interface PlayerCardsResponse {
   card1: number;
   card2: number;
