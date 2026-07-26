@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, TableSession};
+use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -212,6 +212,8 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        mpc_node_progress: Vec::new(),
+        mpc_operation_started: None,
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -409,6 +411,8 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            mpc_node_progress: Vec::new(),
+            mpc_operation_started: None,
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -1147,6 +1151,35 @@ pub async fn get_table_state(
         })?;
 
     Ok(Json(TableStateResponse { state: result }))
+}
+
+/// GET /api/table/{table_id}/mpc-status
+///
+/// Returns per-node MPC phase progress for the table's current operation.
+/// The frontend polls this during deal/reveal/showdown to show a live
+/// indicator of which nodes have responded.
+pub async fn get_mpc_status(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+) -> Result<Json<types::TableMpcStatusResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+
+    let tables = state.tables.read().await;
+    let session = tables.get(&table_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let active_sessions = state.mpc_sessions.read().await.len();
+
+    Ok(Json(types::TableMpcStatusResponse {
+        table_id,
+        phase: session.phase.clone(),
+        nodes: session.mpc_node_progress.clone(),
+        active_sessions,
+    }))
 }
 
 /// GET /api/committee/status

@@ -22,6 +22,7 @@ import { useWalletMonitor } from "@/lib/use-wallet-monitor";
 import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { TransactionSimulation } from "./TransactionSimulation";
+import { MpcNodeIndicator } from "./MpcNodeIndicator";
 import { usePokerActions } from "@/lib/use-poker-actions";
 import { getDealerLine } from "@/lib/dealer-lines";
 import { subscribePokerTableEvents } from "@/lib/events";
@@ -829,6 +830,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             <div className="text-[9px]" style={{ color: "#c8e6ff" }}>
               HAND #{game.handNumber} | {game.phase.toUpperCase()}
             </div>
+            <MpcNodeIndicator tableId={tableId} phase={game.phase} />
 
             {(() => {
               const explorerUrl = game.lastTxHash
