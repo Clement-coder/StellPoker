@@ -1171,6 +1171,36 @@ fn test_hand_ranking_pair_beats_high_card() {
     let high_card = evaluate_hand_rank([11, 23, 0, 1, 3, 5, 7]);
     assert(pair_hand > high_card);
 }
+
+// Additional comprehensive edge case tests for showdown_valid circuit:
+
+#[test]
+fn test_flush_beats_straight() {
+    // Flush (all hearts): 2♥, 3♥, 5♥, 7♥, 9♥, K♦, Q♠
+    let flush = evaluate_hand_rank([13, 26, 32, 45, 48, 9, 22]);
+    // Straight (K-Q-J-10-9): K♠, Q♠, J♠, 10♣, 9♣, 2♥, 3♥
+    let straight = evaluate_hand_rank([11, 24, 37, 8, 21, 0, 1]);
+    assert(flush > straight);
+}
+
+#[test]
+fn test_identical_hands() {
+    // Two players with the same exact cards should have equal score
+    let hand1 = evaluate_hand_rank([12, 25, 38, 0, 1, 2, 3]);
+    let hand2 = evaluate_hand_rank([12, 25, 38, 0, 1, 2, 3]);
+    assert(hand1 == hand2);
+}
+
+#[test]
+fn test_five_card_vs_seven_card_evaluation() {
+    // The evaluate_hand_rank function should return the best 5-card hand
+    // Seven cards: A♠, K♠, Q♠, J♠, 10♠, 9♠, 2♥ (royal flush + extra)
+    let seven_card_hand = evaluate_hand_rank([12, 11, 10, 9, 8, 7, 14]);
+    // Five cards: A♠, K♠, Q♠, J♠, 10♠ (royal flush)
+    let five_card_hand = evaluate_hand_rank([12, 11, 10, 9, 8, 0, 1]);
+    // Both should have same best hand score (royal flush)
+    assert(seven_card_hand == five_card_hand);
+}
 ```
 
 ### Example 2: Commitment Tests

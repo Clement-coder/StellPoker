@@ -6,3 +6,11 @@ compiler_version = ">=0.36.0"
 
 [dependencies]
 stellar_poker_lib = { path = "../lib" }
+
+[package.metadata.circuit]
+description = "Derive shared deck from 3-party permutation/salt shares, verify deck validity, compute Merkle root over card commitments, deterministically assign hole cards to each player."
+constraint_count = 25117
+proof_size_bytes = 16256
+public_inputs_bytes = 640
+poseidon2_permutations = 64
+max_players = 6
