@@ -259,6 +259,9 @@ struct AppState {
     rate_limit_state: Arc<RwLock<RateLimitState>>,
     metrics: MetricsState,
     chat_channels: Arc<Mutex<HashMap<u32, tokio::sync::broadcast::Sender<String>>>>,
+    /// Per-table broadcast channels for `/api/table/:table_id/state/ws`
+    /// (Issue #105 — real-time game state push).
+    game_state_channels: Arc<Mutex<HashMap<u32, tokio::sync::broadcast::Sender<String>>>>,
     mpc_sessions: session_gc::SessionStore,
     stats: stats::StatsStore,
     feature_flags: feature_flags::FeatureFlagStore,
@@ -635,6 +638,7 @@ async fn main() {
         rate_limit_state: Arc::new(RwLock::new(RateLimitState::default())),
         metrics: metrics.clone(),
         chat_channels: Arc::new(Mutex::new(HashMap::new())),
+        game_state_channels: Arc::new(Mutex::new(HashMap::new())),
         mpc_sessions,
         stats: stats_store,
         feature_flags: feature_flag_store,
@@ -776,6 +780,10 @@ async fn main() {
         .route("/api/table/:table_id/state", get(api::get_table_state))
         .route("/api/committee/status", get(api::committee_status))
         .route("/api/table/:table_id/chat/ws", get(chat_ws_handler))
+        .route(
+            "/api/table/:table_id/state/ws",
+            get(game_state_ws_handler),
+        )
         .route(
             "/api/session/:session_id/cancel",
             post(api::cancel_mpc_session),
@@ -999,7 +1007,7 @@ async fn metrics_middleware(
     let method = req.method().to_string();
     let route = format!("{} {}", method, path);
 
-    if path == "/api/health" || path.ends_with("/chat/ws") {
+    if path == "/api/health" || path.ends_with("/chat/ws") || path.ends_with("/state/ws") {
         return next.run(req).await;
     }
 
@@ -1142,6 +1150,65 @@ async fn handle_chat_socket(socket: WebSocket, table_id: u32, state: AppState) {
             }
         }
     });
+
+    tokio::select! {
+        _ = &mut send_task => recv_task.abort(),
+        _ = &mut recv_task => send_task.abort(),
+    }
+}
+
+/// GET /api/table/{table_id}/state/ws
+///
+/// Real-time game state push (Issue #105). Sends the connecting client an
+/// immediate snapshot, then a fresh snapshot every time the table's phase,
+/// cards, or on-chain betting state changes (deal/reveal/showdown/player
+/// actions). Server push only — the coordinator does not read anything the
+/// client sends on this socket. Clients that can't hold a WebSocket open
+/// (or whose upgrade fails) should fall back to polling
+/// `GET /api/table/:table_id/state`.
+async fn game_state_ws_handler(
+    ws: WebSocketUpgrade,
+    axum::extract::Path(table_id): axum::extract::Path<u32>,
+    State(state): State<AppState>,
+) -> Response {
+    ws.on_upgrade(move |socket| handle_game_state_socket(socket, table_id, state))
+}
+
+async fn handle_game_state_socket(socket: WebSocket, table_id: u32, state: AppState) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    let tx = {
+        let mut channels = state.game_state_channels.lock().await;
+        channels
+            .entry(table_id)
+            .or_insert_with(|| {
+                let (tx, _) = tokio::sync::broadcast::channel(100);
+                tx
+            })
+            .clone()
+    };
+    let mut rx = tx.subscribe();
+
+    // Greet the client with the current snapshot immediately, so it doesn't
+    // have to wait for the next state-changing action.
+    if let Some(snapshot) = api::current_game_state_json(&state, table_id).await {
+        if ws_sender.send(Message::Text(snapshot.into())).await.is_err() {
+            return;
+        }
+    }
+
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(msg_str) = rx.recv().await {
+            if ws_sender.send(Message::Text(msg_str.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Server-push only: drain (and discard) whatever the client sends, e.g.
+    // pings, so the socket's read half doesn't back up and the coordinator
+    // notices when the client disconnects.
+    let mut recv_task = tokio::spawn(async move { while ws_receiver.next().await.is_some() {} });
 
     tokio::select! {
         _ = &mut send_task => recv_task.abort(),

@@ -18,6 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -501,6 +502,9 @@ pub async fn request_deal(
     session.showdown_session_id = None;
     session.showdown_result = None;
     session.proof_nonce = 0;
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(DealResponse {
         status: "dealt".to_string(),
@@ -671,6 +675,9 @@ pub async fn request_reveal(
     session
         .revealed_cards_by_phase
         .insert(phase.clone(), parsed_reveal.cards.clone());
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(RevealResponse {
         status: "revealed".to_string(),
@@ -864,6 +871,9 @@ pub async fn request_showdown(
             parsed_showdown.winner_index,
         )
     };
+    drop(tables);
+
+    broadcast_table_state(&state, table_id).await;
 
     Ok(Json(ShowdownResponse {
         status,
@@ -962,6 +972,9 @@ pub async fn player_action(
     } else {
         Some(tx_hash)
     };
+
+    broadcast_table_state(&state, table_id).await;
+
     Ok(Json(PlayerActionResponse {
         status: "applied".to_string(),
         action: normalized,
@@ -1036,6 +1049,89 @@ pub async fn get_player_cards(
         salt1: salts[0].clone(),
         salt2: salts[1].clone(),
     }))
+}
+
+/// Serializable snapshot of a table's in-memory session state, pushed to
+/// WebSocket subscribers of `/api/table/:table_id/state/ws` whenever a deal,
+/// reveal, showdown, or player action mutates it.
+#[derive(Serialize, Clone)]
+pub struct GameStateEvent {
+    pub table_id: u32,
+    pub phase: String,
+    pub deck_root: String,
+    pub board_indices: Vec<u32>,
+    pub dealt_indices: Vec<u32>,
+    pub deal_tx_hash: Option<String>,
+    pub reveal_tx_hashes: HashMap<String, String>,
+    pub showdown_tx_hash: Option<String>,
+    /// Raw on-chain `get_table` JSON (betting/pot/turn state), the same
+    /// payload `GET /api/table/:table_id/state` returns. `None` when Soroban
+    /// isn't configured or the read failed.
+    pub onchain_state: Option<String>,
+}
+
+impl GameStateEvent {
+    fn from_session(session: &TableSession) -> Self {
+        Self {
+            table_id: session.table_id,
+            phase: session.phase.clone(),
+            deck_root: session.deck_root.clone(),
+            board_indices: session.board_indices.clone(),
+            dealt_indices: session.dealt_indices.clone(),
+            deal_tx_hash: session.deal_tx_hash.clone(),
+            reveal_tx_hashes: session.reveal_tx_hashes.clone(),
+            showdown_tx_hash: session.showdown_tx_hash.clone(),
+            onchain_state: None,
+        }
+    }
+}
+
+/// Push the current state for `table_id` to any WebSocket clients subscribed
+/// via `/api/table/:table_id/state/ws`. No-op if nobody has connected for
+/// this table yet. Best-effort: a failed on-chain read still pushes the
+/// in-memory snapshot.
+pub async fn broadcast_table_state(state: &AppState, table_id: u32) {
+    let has_subscribers = {
+        let channels = state.game_state_channels.lock().await;
+        channels
+            .get(&table_id)
+            .map(|tx| tx.receiver_count() > 0)
+            .unwrap_or(false)
+    };
+    if !has_subscribers {
+        return;
+    }
+
+    let event = {
+        let tables = state.tables.read().await;
+        tables.get(&table_id).map(GameStateEvent::from_session)
+    };
+    let Some(mut event) = event else {
+        return;
+    };
+
+    if state.soroban_config.is_configured() {
+        event.onchain_state = soroban::get_table_state(&state.soroban_config, table_id)
+            .await
+            .ok();
+    }
+
+    let Ok(payload) = serde_json::to_string(&event) else {
+        return;
+    };
+
+    let channels = state.game_state_channels.lock().await;
+    if let Some(tx) = channels.get(&table_id) {
+        let _ = tx.send(payload);
+    }
+}
+
+/// Current state snapshot as JSON, used to greet a newly-connected
+/// WebSocket client so it doesn't have to wait for the next mutation.
+pub async fn current_game_state_json(state: &AppState, table_id: u32) -> Option<String> {
+    let tables = state.tables.read().await;
+    let event = tables.get(&table_id).map(GameStateEvent::from_session)?;
+    serde_json::to_string(&event).ok()
 }
 
 /// GET /api/table/{table_id}/state

@@ -303,27 +303,38 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
     void syncOnChainState();
 
     // Event-driven refresh: subscribe to the poker table contract's events and
-    // re-sync immediately whenever a state transition is emitted. A slower
-    // interval remains as a safety net in case an event is missed.
-    let unsubscribe: (() => void) | undefined;
+    // re-sync immediately whenever a state transition is emitted.
+    let unsubscribeChainEvents: (() => void) | undefined;
     void subscribePokerTableEvents(() => {
       void syncOnChainState();
     })
       .then((sub) => {
-        unsubscribe = sub.stop;
+        unsubscribeChainEvents = sub.stop;
       })
       .catch(() => {
         // Event subscription unavailable — fall back to interval polling only.
       });
 
+    // Coordinator WebSocket push (Issue #105): the coordinator notifies us
+    // the instant a deal/reveal/showdown/player action lands, so we don't
+    // have to wait on the slower interval below. `subscribeGameState`
+    // returns null on browsers without WebSocket support, in which case the
+    // interval poll is the only refresh mechanism.
+    const gameStateSocket = api.subscribeGameState(tableId, () => {
+      void syncOnChainState();
+    });
+
+    // Safety net in case a chain event or WebSocket push is missed or the
+    // browser has no WebSocket support at all.
     const interval = setInterval(() => {
       void syncOnChainState();
     }, 8000);
     return () => {
       clearInterval(interval);
-      unsubscribe?.();
+      unsubscribeChainEvents?.();
+      gameStateSocket?.stop();
     };
-  }, [syncOnChainState]);
+  }, [syncOnChainState, tableId]);
 
   // Infer sensible default play mode from table capacity when no explicit mode was provided.
   useEffect(() => {
@@ -657,9 +668,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
     const connect = () => {
       if (!active) return;
-      const base = api.COORDINATOR_API_BASE;
-      const wsBase = base.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
-      const wsUrl = `${wsBase}/api/table/${tableId}/chat/ws`;
+      const wsUrl = `${api.coordinatorWsBase()}/api/table/${tableId}/chat/ws`;
 
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
