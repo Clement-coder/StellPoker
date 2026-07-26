@@ -204,6 +204,13 @@ main() {
     done
 
     echo "Circuit compilation complete."
+
+    echo "Running circuit unit tests (circuits/lib)..."
+    HOME="${PROJECT_DIR}/.tmp_nargo_home" \
+        "${nargo_bin}" test --program-dir "${PROJECT_DIR}/circuits/lib" || {
+        echo "WARNING: nargo test failed for circuits/lib" >&2
+    }
+    echo "Circuit unit tests complete."
 }
 
 main "$@"
