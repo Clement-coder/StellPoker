@@ -1,0 +1,8 @@
+[package]
+name = "tournament_aggregator"
+type = "bin"
+authors = [""]
+compiler_version = ">=1.0.0-beta.17"
+
+[dependencies]
+lib = { path = "../lib" }
