@@ -178,6 +178,7 @@ impl PokerTableContract {
             committee: config.committee,
             session_id: 0,
             rake_balance: 0,
+            action_deadline: 0,
         };
 
         save_table(&env, &table);
@@ -388,6 +389,8 @@ impl PokerTableContract {
             return Err(PokerTableError::NotEnoughPlayers);
         }
         table.current_turn = (table.dealer_seat + 3) % num_players;
+        // Set action deadline for the first player to act
+        table.action_deadline = env.ledger().sequence() + table.config.timeout_ledgers;
 
         save_table(&env, &table);
 
@@ -577,6 +580,28 @@ impl PokerTableContract {
         let mut table = load_table(&env, table_id)?;
 
         timeout::process_timeout(&env, &mut table, &claimer)?;
+
+        save_table(&env, &table);
+        Ok(())
+    }
+
+    /// Force-fold a stalling player after the action deadline has passed.
+    ///
+    /// Any seated player may call this once the `action_deadline` ledger has
+    /// been reached. The target player (must be the current turn) is folded
+    /// and the deadline is reset for the next active player.
+    pub fn force_fold(
+        env: Env,
+        table_id: u32,
+        caller: Address,
+        target_seat: u32,
+    ) -> Result<(), PokerTableError> {
+        caller.require_auth();
+        require_not_paused(&env, table_id)?;
+
+        let mut table = load_table(&env, table_id)?;
+
+        timeout::force_fold(&env, &mut table, &caller, target_seat)?;
 
         save_table(&env, &table);
         Ok(())

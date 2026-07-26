@@ -267,6 +267,8 @@ fn build_session_from_onchain_state(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        mpc_node_progress: Vec::new(),
+        mpc_operation_started: None,
     })
 }
 

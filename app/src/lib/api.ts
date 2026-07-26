@@ -527,6 +527,32 @@ export async function getStats(): Promise<StatsResponse> {
   return res.json();
 }
 
+// ── MPC Node Status ──────────────────────────────────────────────────────────
+
+export interface MpcNodeProgress {
+  endpoint: string;
+  phase: string;
+  healthy: boolean;
+  elapsed_secs: number;
+}
+
+export interface TableMpcStatusResponse {
+  table_id: number;
+  phase: string;
+  nodes: MpcNodeProgress[];
+  active_sessions: number;
+}
+
+export async function getMpcStatus(
+  tableId: number
+): Promise<TableMpcStatusResponse> {
+  const res = await fetch(`${API_BASE}/api/table/${tableId}/mpc-status`);
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `MPC status failed: ${res.status}`));
+  }
+  return res.json();
+}
+
 export interface WalletChallengeResponse {
   challenge: string;
 }
