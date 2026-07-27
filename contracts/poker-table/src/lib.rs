@@ -251,6 +251,7 @@ impl PokerTableContract {
             rake_balance: 0,
             action_deadline: 0,
             hand_actions: Vec::new(&env),
+            jackpot_balance: 0,
         };
 
         save_table(&env, &table);
@@ -727,6 +728,12 @@ impl PokerTableContract {
     }
 
     /// Submit showdown: reveal hole cards, verify winner, settle.
+    ///
+    /// `bad_beat_scores` is a committee-submitted vector of `(seat, hand_score)`
+    /// pairs for every non-folded player at showdown.  The contract checks
+    /// these against the configured bad-beat threshold and, if a qualifying
+    /// losing hand exists, pays out the jackpot pool.  Pass an empty vector
+    /// to skip the check.
     pub fn submit_showdown(
         env: Env,
         table_id: u32,
@@ -735,6 +742,7 @@ impl PokerTableContract {
         _salts: Vec<(BytesN<32>, BytesN<32>)>,
         proof: Bytes,
         public_inputs: Bytes,
+        bad_beat_scores: Vec<(u32, u32)>,
     ) -> Result<(), PokerTableError> {
         committee.require_auth();
         require_not_paused(&env, table_id)?;
@@ -791,7 +799,7 @@ impl PokerTableContract {
 
         // Settle using the proved winner and optional tie mask from the proof
         // (not re-evaluating hands on-chain).
-        game::settle_showdown(&env, &mut table, winner_index, tie_mask)?;
+        game::settle_showdown(&env, &mut table, winner_index, tie_mask, &bad_beat_scores)?;
 
         save_table(&env, &table);
         Ok(())
@@ -984,6 +992,52 @@ impl PokerTableContract {
     pub fn get_rake_balance(env: Env, table_id: u32) -> Result<i128, PokerTableError> {
         let table = load_table(&env, table_id)?;
         Ok(table.rake_balance)
+    }
+
+    /// Read the bad-beat jackpot pool balance for a table (view function).
+    pub fn get_jackpot_balance(env: Env, table_id: u32) -> Result<i128, PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        Ok(table.jackpot_balance)
+    }
+
+    /// Read the jackpot configuration parameters for a table (view function).
+    pub fn get_jackpot_config(
+        env: Env,
+        table_id: u32,
+    ) -> Result<(u32, u32, u32), PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        Ok((
+            table.config.jackpot_rake_share_bps,
+            table.config.min_bad_beat_category,
+            table.config.min_bad_beat_rank,
+        ))
+    }
+
+    /// Update the jackpot configuration (admin only).
+    ///
+    /// `jackpot_rake_share_bps` is the share of each hand's rake, in basis
+    /// points, that feeds the jackpot pool (`0` disables the jackpot).
+    /// `min_category` and `min_rank` define the qualifying hand threshold
+    /// (defaults: category 7 = FourOfAKind, rank 12 = Ace).
+    pub fn set_jackpot_config(
+        env: Env,
+        table_id: u32,
+        jackpot_rake_share_bps: u32,
+        min_category: u32,
+        min_rank: u32,
+    ) -> Result<(), PokerTableError> {
+        let mut table = load_table(&env, table_id)?;
+        table.admin.require_auth();
+        table.config.jackpot_rake_share_bps = jackpot_rake_share_bps;
+        table.config.min_bad_beat_category = min_category;
+        table.config.min_bad_beat_rank = min_rank;
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "jackpot_config_updated"), table_id),
+            (jackpot_rake_share_bps, min_category, min_rank),
+        );
+        Ok(())
     }
 
     /// Withdraw the accumulated rake to the table admin. Returns the amount

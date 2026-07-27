@@ -245,8 +245,7 @@ TOML
 
             HOME="${PROJECT_DIR}/.tmp_nargo_home" \
                 PLAYER_COUNT="${npc}" \
-                "${nargo_bin}" compile --program-dir "${variant_dir}" \
-                --program-name "${variant}"
+                "${nargo_bin}" compile --program-dir "${variant_dir}"
             verify_artifact_version "${artifact}"
         done
     done

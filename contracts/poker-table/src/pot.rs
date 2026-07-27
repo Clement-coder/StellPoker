@@ -6,6 +6,34 @@ use crate::types::*;
 /// Maximum allowed rake, in basis points (5%). Enforced at table creation.
 pub const MAX_RAKE_BPS: u32 = 500;
 
+/// Default minimum hand category for bad-beat qualification (7 = FourOfAKind).
+#[allow(dead_code)]
+pub const BAD_BEAT_DEFAULT_MIN_CATEGORY: u32 = 7;
+/// Default minimum rank for bad-beat qualification (12 = Ace).
+#[allow(dead_code)]
+pub const BAD_BEAT_DEFAULT_MIN_RANK: u32 = 12;
+
+/// Compute the minimum hand score that qualifies for a bad-beat jackpot payout.
+/// A hand qualifies if its category >= `category` and, when equal, its
+/// quad/trip rank >= `rank`.  This is encoded as:
+///   `score = (category << 28) | (rank << 4)`
+/// which matches the tiebreaker layout used by `HandRank` in `stellar-zk-cards`.
+pub fn min_bad_beat_qualifying_score(category: u32, rank: u32) -> u32 {
+    (category << 28) | (rank << 4)
+}
+
+/// Split `total_rake` into the house share and the jackpot share according to
+/// `jackpot_share_bps` (basis points of the rake).  When jackpot is disabled
+/// (`jackpot_share_bps == 0`), the entire rake goes to the house.
+pub fn split_jackpot_rake(total_rake: i128, jackpot_share_bps: u32) -> (i128, i128) {
+    if jackpot_share_bps == 0 {
+        return (total_rake, 0);
+    }
+    let jackpot = (total_rake * jackpot_share_bps as i128) / 10_000;
+    let house = total_rake - jackpot;
+    (house, jackpot)
+}
+
 /// Deduct rake from each pot before distribution. Rake is computed per pot as
 /// `floor(pot.amount * rake_bps / 10_000)`, so the fee is predictable and
 /// proportional to each pot's own size — side pots are raked independently of
@@ -440,6 +468,9 @@ mod pot_test {
                 game_hub: admin.clone(),
                 rake_bps: 0,
                 max_rebuys: 0,
+                jackpot_rake_share_bps: 0,
+                min_bad_beat_category: 7,
+                min_bad_beat_rank: 12,
             },
             phase: GamePhase::Showdown,
             players,
@@ -458,6 +489,7 @@ mod pot_test {
             rake_balance: 0,
             action_deadline: 0,
             hand_actions: Vec::new(env),
+            jackpot_balance: 0,
         }
     }
 

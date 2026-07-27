@@ -353,18 +353,23 @@ export async function createTable(
   auth: AuthSigner,
   maxPlayers: number,
   solo = false,
-  buyIn?: string
+  buyIn?: string,
+  token?: string | undefined
 ): Promise<CreateTableResponse> {
   const payload: {
     max_players: number;
     solo: boolean;
     buy_in?: string;
+    token?: string | null;
   } = {
     max_players: maxPlayers,
     solo,
   };
   if (buyIn) {
     payload.buy_in = buyIn;
+  }
+  if (token) {
+    payload.token = token;
   }
 
   const res = await authedFetch(

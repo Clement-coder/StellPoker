@@ -26,6 +26,7 @@ import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
 import { TableTabs } from "./TableTabs";
 import { ThemeSelector } from "./ThemeSelector";
+import { Skeleton } from "./Skeleton";
 import { TableMiniMap } from "./TableMiniMap";
 import { LanguageSelector } from "./LanguageSelector";
 import { useI18n, useT } from "@/lib/i18n/context";
@@ -118,10 +119,11 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
   const [onChainPhase, setOnChainPhase] = useState<string>("unknown");
   const [winnerAddress, setWinnerAddress] = useState<string | null>(null);
   const [lobby, setLobby] = useState<api.TableLobbyResponse | null>(null);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(true);
   const [botLine, setBotLine] = useState<string | null>(null);
   const [gameboyOpen, setGameboyOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [replayEntry, setReplayEntry] = useState<HandHistoryEntry | null>(null);
+  const [loadingSkeletonTest, setLoadingSkeletonTest] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<HandHistoryEntry[]>(() =>
     loadHandHistory(tableId)
   );
@@ -220,6 +222,9 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
       if (lobbyState) {
         setLobby(lobbyState);
       }
+
+      // Hide skeleton after first successful sync
+      setShowSkeleton(false);
 
       const phaseRaw = typeof parsed.phase === "string" ? parsed.phase : null;
       if (phaseRaw) {
@@ -824,11 +829,28 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
     <PixelWorld>
       <div className="min-h-screen flex flex-col items-center gap-4 p-4 pt-6 relative z-[10]">
         {/* Switcher for a player sitting at several tables at once (#72) */}
-        <TableTabs
-          activeTableId={tableId}
-          activeMode={playMode}
-          address={userAddress ?? null}
-        />
+        {showSkeleton ? (
+          <div className="w-full max-w-3xl p-6">
+            <div className="flex gap-4">
+              <div style={{ width: 220 }}>
+                <Skeleton height="18px" className="mb-3" />
+                <Skeleton height="140px" className="mb-2" />
+                <div className="flex gap-2 mt-2"><Skeleton width="60px" height="24px" /><Skeleton width="60px" height="24px" /></div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <Skeleton height="18px" className="mb-3" />
+                <Skeleton height="220px" className="mb-4" />
+                <div className="grid grid-cols-3 gap-2"><Skeleton height="40px" /><Skeleton height="40px" /><Skeleton height="40px" /></div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <TableTabs
+            activeTableId={tableId}
+            activeMode={playMode}
+            address={userAddress ?? null}
+          />
+        )}
 
         {/* Header bar */}
         <div className="w-full max-w-3xl flex items-center justify-between">
