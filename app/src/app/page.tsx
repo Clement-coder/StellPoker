@@ -18,6 +18,11 @@ import {
   type WalletType,
 } from "@/lib/wallet";
 import { useWalletMonitor } from "@/lib/use-wallet-monitor";
+import {
+  loadOpenTables,
+  tableHref,
+  type OpenTable,
+} from "@/lib/open-tables";
 
 type Screen = "splash" | "connect" | "menu" | "create" | "join";
 const STROOPS_PER_XLM = BigInt("10000000");
@@ -58,6 +63,7 @@ export default function Home() {
   const [joinTableId, setJoinTableId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingTableId, setPendingTableId] = useState<number | null>(null);
+  const [openTables, setOpenTables] = useState<OpenTable[]>([]);
 
   const joinTableSim = useJoinTableSimulation(wallet, () => {
     if (pendingTableId) {
@@ -86,6 +92,12 @@ export default function Home() {
       setAvailableWallets(detectInstalledWallets());
     }
   }, [screen]);
+
+  // Tables this wallet already has open, so a multi-tabling player can drop
+  // straight back into one instead of retyping its ID (#72).
+  useEffect(() => {
+    setOpenTables(wallet ? loadOpenTables(wallet.address) : []);
+  }, [wallet, screen]);
 
   // Auto-advance from connect → menu when wallet connects
   useEffect(() => {
@@ -594,6 +606,35 @@ export default function Home() {
             >
               JOIN TABLE
             </h2>
+
+            {/* Tables already open in this browser */}
+            {openTables.length > 0 && (
+              <div className="w-full flex flex-col gap-2">
+                <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
+                  YOUR TABLES
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {openTables.map((table) => (
+                    <Link
+                      key={table.tableId}
+                      href={tableHref(table)}
+                      className="pixel-border-thin px-3 py-2 text-[10px]"
+                      style={{
+                        background: "rgba(20, 90, 50, 0.35)",
+                        borderColor: "#27ae60",
+                        color: "#eafaf1",
+                        textDecoration: "none",
+                      }}
+                    >
+                      #{table.tableId}
+                    </Link>
+                  ))}
+                </div>
+                <div className="text-[9px]" style={{ color: "#95a5a6" }}>
+                  You can play several tables at once.
+                </div>
+              </div>
+            )}
 
             {/* Join by ID */}
             <div className="flex items-center gap-2 w-full">

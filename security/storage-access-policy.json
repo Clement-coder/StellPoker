@@ -36,6 +36,11 @@
           "auth_model": "written_only_on_hand_settlement",
           "admin_multisig_required": false
         },
+        "DataKey::PlayerTables": {
+          "authorized_functions": ["join_table", "leave_table"],
+          "auth_model": "player_require_auth",
+          "admin_multisig_required": false
+        },
         "DataKey::Paused": {
           "authorized_functions": ["pause", "unpause"],
           "auth_model": "table_admin_require_auth",

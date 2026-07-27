@@ -124,6 +124,62 @@ fn verify_hole_cards_against_proof(
     Ok(())
 }
 
+/// Record that `player` now holds a seat at `table_id`.
+///
+/// The index is a convenience for multi-table clients, not a limit: nothing
+/// here rejects a wallet for sitting at too many tables. Its length is the
+/// number of live seats the wallet holds, which is bounded in practice by the
+/// buy-in each seat costs.
+fn index_player_table(env: &Env, player: &Address, table_id: u32) {
+    let key = DataKey::PlayerTables(player.clone());
+    let mut tables: Vec<u32> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    for i in 0..tables.len() {
+        if let Some(existing) = tables.get(i) {
+            if constant_time::u32_eq(existing, table_id) {
+                return; // already indexed
+            }
+        }
+    }
+
+    tables.push_back(table_id);
+    env.storage().persistent().set(&key, &tables);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TABLE_TTL_THRESHOLD, TABLE_TTL_EXTEND);
+}
+
+/// Drop `table_id` from `player`'s seat index.
+fn unindex_player_table(env: &Env, player: &Address, table_id: u32) {
+    let key = DataKey::PlayerTables(player.clone());
+    let tables: Vec<u32> = match env.storage().persistent().get(&key) {
+        Some(t) => t,
+        None => return,
+    };
+
+    let mut remaining: Vec<u32> = Vec::new(env);
+    for i in 0..tables.len() {
+        if let Some(existing) = tables.get(i) {
+            if constant_time::u32_ne(existing, table_id) {
+                remaining.push_back(existing);
+            }
+        }
+    }
+
+    if remaining.is_empty() {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &remaining);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TABLE_TTL_THRESHOLD, TABLE_TTL_EXTEND);
+    }
+}
+
 /// Find a seated player's index, or `PlayerNotAtTable`.
 fn find_seat(env: &Env, table: &TableState, player: &Address) -> Result<u32, PokerTableError> {
     for i in 0..table.players.len() {
@@ -260,6 +316,7 @@ impl PokerTableContract {
         });
 
         save_table(&env, &table);
+        index_player_table(&env, &player, table_id);
 
         env.events().publish(
             (Symbol::new(&env, "player_joined"), table_id),
@@ -267,6 +324,27 @@ impl PokerTableContract {
         );
 
         Ok(seat)
+    }
+
+    /// Tables a wallet is currently seated at.
+    ///
+    /// A wallet may sit at any number of tables at once — there is no per-player
+    /// cap, only the per-table `max_players` and whatever capital the player is
+    /// willing to put up. This index exists so a multi-table client can restore
+    /// a player's open seats after a reload without scanning every table.
+    ///
+    /// The list is maintained on `join_table` and `leave_table`, so it holds
+    /// only live seats.
+    pub fn get_player_tables(env: Env, player: Address) -> Vec<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerTables(player))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Number of tables a wallet is currently seated at.
+    pub fn get_player_table_count(env: Env, player: Address) -> u32 {
+        Self::get_player_tables(env, player).len()
     }
 
     /// Top a seated player's stack up by a partial amount.
@@ -436,6 +514,7 @@ impl PokerTableContract {
         }
 
         save_table(&env, &table);
+        unindex_player_table(&env, &player, table_id);
 
         env.events().publish(
             (Symbol::new(&env, "player_left"), table_id),

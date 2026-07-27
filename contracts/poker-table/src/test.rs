@@ -1596,6 +1596,115 @@ mod test {
         assert_eq!(count, 0);
     }
 
+    // ---------------------------------------------------------------------------
+    // Multiple simultaneous tables per player (#72)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_one_wallet_can_sit_at_many_tables_at_once() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        // Enough tables to make clear there is no small cap hiding anywhere.
+        let mut table_ids: Vec<u32> = Vec::new(&s.env);
+        for _ in 0..8u32 {
+            let table_id = create_default_table(&s);
+            join_player(&s, table_id, &player, 300);
+            table_ids.push_back(table_id);
+        }
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 8);
+        assert_eq!(s.client.get_player_table_count(&player), 8);
+        for i in 0..table_ids.len() {
+            let table_id = table_ids.get(i).unwrap();
+            assert_eq!(seated.get(i).unwrap(), table_id);
+            let table = s.client.get_table(&table_id);
+            assert_eq!(table.players.get(0).unwrap().address, player);
+        }
+    }
+
+    #[test]
+    fn test_player_table_index_is_empty_by_default() {
+        let s = setup();
+        let stranger = Address::generate(&s.env);
+        assert_eq!(s.client.get_player_tables(&stranger).len(), 0);
+        assert_eq!(s.client.get_player_table_count(&stranger), 0);
+    }
+
+    #[test]
+    fn test_leaving_one_table_keeps_the_others() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let a = create_default_table(&s);
+        let b = create_default_table(&s);
+        let c = create_default_table(&s);
+        for table_id in [a, b, c] {
+            join_player(&s, table_id, &player, 300);
+        }
+
+        s.client.leave_table(&b, &player);
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 2);
+        assert_eq!(seated.get(0).unwrap(), a);
+        assert_eq!(seated.get(1).unwrap(), c);
+    }
+
+    #[test]
+    fn test_leaving_the_last_table_clears_the_index() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let table_id = create_default_table(&s);
+        join_player(&s, table_id, &player, 300);
+        s.client.leave_table(&table_id, &player);
+
+        assert_eq!(s.client.get_player_tables(&player).len(), 0);
+    }
+
+    #[test]
+    fn test_tables_stay_independent_across_concurrent_seats() {
+        let s = setup();
+        let hero = Address::generate(&s.env);
+        let villain_a = Address::generate(&s.env);
+        let villain_b = Address::generate(&s.env);
+
+        let a = create_default_table(&s);
+        let b = create_default_table(&s);
+        join_player(&s, a, &hero, 400);
+        join_player(&s, a, &villain_a, 400);
+        join_player(&s, b, &hero, 400);
+        join_player(&s, b, &villain_b, 400);
+
+        // A hand on table A leaves table B untouched.
+        play_fold_hand(&s, a);
+
+        assert_eq!(s.client.get_table(&a).phase, GamePhase::Settlement);
+        assert_eq!(s.client.get_table(&b).phase, GamePhase::Waiting);
+        assert_eq!(s.client.get_hand_history(&a, &0).len(), 1);
+        assert_eq!(s.client.get_hand_history(&b, &0).len(), 0);
+
+        // Hero is still seated at both.
+        assert_eq!(s.client.get_player_tables(&hero).len(), 2);
+    }
+
+    #[test]
+    fn test_rejoining_does_not_duplicate_the_index_entry() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let table_id = create_default_table(&s);
+        join_player(&s, table_id, &player, 300);
+        s.client.leave_table(&table_id, &player);
+        join_player(&s, table_id, &player, 300);
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 1);
+        assert_eq!(seated.get(0).unwrap(), table_id);
+    }
+
     #[test]
     fn test_hand_history_is_per_table() {
         let s = setup();
