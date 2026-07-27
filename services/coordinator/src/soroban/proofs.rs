@@ -210,6 +210,8 @@ pub async fn submit_showdown_proof(
             hole_cards_json,
             "--salts".to_string(),
             "[]".to_string(),
+            "--bad_beat_scores".to_string(),
+            "[]".to_string(),
             "--proof".to_string(),
             proof_hex,
             "--public_inputs".to_string(),

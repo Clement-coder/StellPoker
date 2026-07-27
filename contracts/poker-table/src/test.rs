@@ -72,6 +72,9 @@ mod test {
             game_hub,
             rake_bps: 0,
             max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         }
     }
 
@@ -141,6 +144,9 @@ mod test {
             game_hub,
             rake_bps,
             max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         }
     }
 
