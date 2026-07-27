@@ -60,6 +60,7 @@ mod mpc_heartbeat;
 mod node_reliability;
 mod plugin;
 mod proof_cache;
+mod rate_limit;
 mod rate_limit_db;
 #[path = "middleware.rs"]
 mod request_log;
@@ -270,6 +271,10 @@ struct AppState {
     admin_config: Arc<RwLock<api::admin::AdminConfig>>,
     admin_state: api::admin::AdminState,
     rate_limit_state: Arc<RwLock<RateLimitState>>,
+    /// Per-IP sliding-window buckets for the global rate-limit middleware (Issue #25).
+    ip_buckets: rate_limit::IpBucketStore,
+    /// Counter of 429 responses; watched by the sustained-rate alert task (Issue #25).
+    rejection_counter: rate_limit::RejectionCounter,
     metrics: MetricsState,
     chat_channels: Arc<Mutex<HashMap<u32, tokio::sync::broadcast::Sender<String>>>>,
     /// Per-table broadcast channels for `/api/table/:table_id/state/ws`
@@ -699,8 +704,13 @@ async fn main() {
         benchmark_store,
         committee_key_rotation,
         tournaments: tournament::new_store(),
+        ip_buckets: rate_limit::new_ip_bucket_store(),
+        rejection_counter: rate_limit::new_rejection_counter(),
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
+    // Spawn rate-limit background tasks (Issue #25).
+    rate_limit::spawn_rate_alert_task(state.rejection_counter.clone());
+    rate_limit::spawn_bucket_gc_task(state.ip_buckets.clone());
     key_rotation::spawn_rotation_task(
         state.committee_key_rotation.clone(),
         state.soroban_config.clone(),
@@ -935,6 +945,13 @@ async fn main() {
             mpc_auth_middleware::authenticate_mpc_request,
         ))
         .layer(middleware::from_fn(request_log::log_request))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limit::RateLimitMiddlewareState {
+                buckets: state.ip_buckets.clone(),
+                rejections: state.rejection_counter.clone(),
+            },
+            rate_limit::ip_rate_limit_middleware,
+        ))
         .layer(build_cors_layer(state.db_pool.as_deref()).await)
         .layer(middleware::from_fn(api_version::rewrite_and_tag_version))
         .with_state(state);
