@@ -153,6 +153,22 @@ pub struct OpenTableInfo {
     pub open_wallet_slots: usize,
 }
 
+/// Multi-table overview entry for the mini-map (Issue #53).
+#[derive(Serialize, ToSchema, Clone)]
+pub struct TableOverviewInfo {
+    pub table_id: u32,
+    pub phase: String,
+    pub max_players: u32,
+    pub seated: usize,
+    pub total_chips: i64,
+    pub stacks: Vec<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TableOverviewResponse {
+    pub tables: Vec<TableOverviewInfo>,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct JoinTableResponse {
     pub table_id: u32,

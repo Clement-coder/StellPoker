@@ -141,6 +141,7 @@ struct HealthResponse {
         api::get_chain_config,
         api::create_table,
         api::list_open_tables,
+        api::list_table_overview,
         api::join_table,
         api::get_table_lobby,
         api::request_deal,
@@ -201,6 +202,11 @@ struct HealthResponse {
         api::types::CreateTableResponse,
         api::types::OpenTablesResponse,
         api::types::OpenTableInfo,
+        api::types::TableOverviewResponse,
+        api::types::TableOverviewInfo,
+        stats::PlayerHudStats,
+        stats::RatingEntry,
+        stats::RatingLeaderboardResponse,
         api::types::JoinTableResponse,
         api::types::TableLobbyResponse,
         api::types::LobbySeat,
@@ -798,6 +804,12 @@ async fn main() {
         )
         .route("/api/tables/create", post(api::create_table))
         .route("/api/tables/open", get(api::list_open_tables))
+        .route("/api/tables/overview", get(api::list_table_overview))
+        .route("/api/stats/player/:address", get(get_player_hud_stats))
+        .route(
+            "/api/ratings/leaderboard",
+            get(get_rating_leaderboard),
+        )
         .route("/api/chain-config", get(api::get_chain_config))
         .route("/api/table/:table_id/join", post(api::join_table))
         .route("/api/table/:table_id/lobby", get(api::get_table_lobby))
@@ -1274,6 +1286,32 @@ async fn handle_game_state_socket(socket: WebSocket, table_id: u32, state: AppSt
 async fn get_stats(State(state): State<AppState>) -> Json<stats::StatsResponse> {
     let ttl = std::time::Duration::from_secs(30);
     Json(stats::get_stats(&state.stats, ttl).await)
+}
+
+/// GET /api/stats/player/:address — HUD stats for seat tooltip (Issue #55).
+async fn get_player_hud_stats(
+    State(state): State<AppState>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+) -> Json<stats::PlayerHudStats> {
+    Json(stats::get_player_hud(&state.stats, &address).await)
+}
+
+/// GET /api/ratings/leaderboard — on-chain ELO leaderboard cache (Issue #70).
+async fn get_rating_leaderboard(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<stats::RatingLeaderboardResponse> {
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 50);
+    stats::ensure_demo_ratings(&state.stats).await;
+    Json(stats::get_rating_leaderboard(&state.stats, offset, limit).await)
 }
 
 async fn get_benchmarks(State(state): State<AppState>) -> Json<serde_json::Value> {
