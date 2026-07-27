@@ -12,12 +12,16 @@
  --bg-top: #0a0a12;
  --bg-bottom: #0d1220;
  --text-color: #f5f5f5;
+ --pixel-cream: #f5f5f5;
+ --ui-border: #6b4f12;
 }
 
 :root[data-theme="light"] {
  --bg-top: #87ceeb;
  --bg-bottom: #cfefff;
  --text-color: #222222;
+ --pixel-cream: #3d2400;
+ --ui-border: #8b6914;
 }
 
 :root {
