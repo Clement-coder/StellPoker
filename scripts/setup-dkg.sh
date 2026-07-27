@@ -25,6 +25,16 @@ DATA_DIR="services/node/data"
 CONFIG_DIR="services/node/config/local"
 MIN_STAKE=1000000000 # 100 XLM in stroops
 ENV_FILE=".env.local"
+# Issue #95: committee members registered on-chain vs. the 3 that actually
+# run the (protocol-fixed) 3-party REP3 session. Registering more than 3
+# gives a pool to draw a fresh 3-of-N from if a member needs replacing —
+# e.g. COMMITTEE_REGISTERED_NODES=5 COMMITTEE_EPOCH_THRESHOLD=3 for the
+# "N=5, threshold=3" committee. TLS certs / REP3 party configs are only
+# generated for roles 0-2 either way; extra registered members (3, 4, ...)
+# reuse an existing role's config when promoted (see
+# scripts/promote-mpc-standby.sh) rather than adding new REP3 parties.
+REGISTERED_NODES=3
+EPOCH_THRESHOLD=2
 
 # Show usage
 usage() {
@@ -34,6 +44,8 @@ usage() {
     echo "  --data-dir PATH     Path to store generated keys/certs (default: $DATA_DIR)"
     echo "  --config-dir PATH   Path to store TOML config files (default: $CONFIG_DIR)"
     echo "  --min-stake STROOPS Minimum stake in stroops (default: $MIN_STAKE)"
+    echo "  --registered-nodes N  On-chain committee members to register (default: $REGISTERED_NODES)"
+    echo "  --epoch-threshold N   Minimum members required in the active epoch (default: $EPOCH_THRESHOLD)"
     echo "  --help              Display this message"
     exit 0
 }
@@ -51,6 +63,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --min-stake)
             MIN_STAKE="$2"
+            shift 2
+            ;;
+        --registered-nodes)
+            REGISTERED_NODES="$2"
+            shift 2
+            ;;
+        --epoch-threshold)
+            EPOCH_THRESHOLD="$2"
             shift 2
             ;;
         --help|-h)
@@ -228,14 +248,18 @@ EOF
 done
 
 # 6. Generate Stellar Node Identities and Fund
-echo "Generating node Stellar keys..."
+# Registers $REGISTERED_NODES on-chain identities (default 3). Only roles
+# 0-2 get their own REP3 party config/TLS certs above; any beyond that are
+# standby operators for an existing role (see scripts/promote-mpc-standby.sh)
+# and don't need one of their own.
+echo "Generating node Stellar keys ($REGISTERED_NODES total)..."
 FRIENDBOT_URL="http://localhost:8000/friendbot"
-for i in 0 1 2; do
+for i in $(seq 0 $((REGISTERED_NODES - 1))); do
     ident="node${i}-local"
     stellar keys generate "$ident" --overwrite 2>/dev/null || true
     addr=$(stellar keys address "$ident")
     echo "  Node $i address: $addr"
-    
+
     # Fund via friendbot
     echo "  Funding node${i}-local via Friendbot..."
     curl -sf "${FRIENDBOT_URL}?addr=${addr}" >/dev/null || {
@@ -255,13 +279,13 @@ stellar contract invoke \
     --stake_token "$TOKEN_CONTRACT" \
     --min_stake "$MIN_STAKE" 2>&1 | grep -i "already initialized" || true
 
-echo "Registering committee members..."
-for i in 0 1 2; do
+echo "Registering committee members ($REGISTERED_NODES total)..."
+for i in $(seq 0 $((REGISTERED_NODES - 1))); do
     ident="node${i}-local"
     addr=$(stellar keys address "$ident")
     port=$((8101 + i))
     endpoint="http://localhost:${port}"
-    
+
     region="us-east-1"
     echo "  Registering Node $i ($addr) at $endpoint (region: $region)..."
     # Invoke as the member node itself to satisfy require_auth
@@ -278,12 +302,18 @@ for i in 0 1 2; do
 done
 
 # 8. Create Epoch
-echo "Creating active epoch..."
+# The active epoch always lists roles 0-2 — the 3 that actually run REP3
+# sessions — regardless of how many extra standby members were registered
+# above. --epoch-threshold documents the minimum committee size (e.g. 3, for
+# an "N=5, threshold=3" committee) without changing REP3's fixed 3-party
+# session size. If a registered standby (node3-local, node4-local, ...) is
+# promoted to replace roles 0-2 (scripts/promote-mpc-standby.sh), re-run
+# create_epoch with its address swapped in for the one it replaced.
+echo "Creating active epoch (threshold=$EPOCH_THRESHOLD)..."
 node0_addr=$(stellar keys address node0-local)
 node1_addr=$(stellar keys address node1-local)
 node2_addr=$(stellar keys address node2-local)
 
-# Invoke as admin to activate the epoch with threshold=2
 stellar contract invoke \
     --id "$COMMITTEE_REGISTRY_CONTRACT" \
     --source committee-local \
@@ -292,7 +322,7 @@ stellar contract invoke \
     -- create_epoch \
     --admin "$COMMITTEE_ADDRESS" \
     --members "[\"$node0_addr\",\"$node1_addr\",\"$node2_addr\"]" \
-    --threshold 2 >/dev/null
+    --threshold "$EPOCH_THRESHOLD" >/dev/null
 
 # 9. Verify Setup
 echo "Verifying active committee epoch..."

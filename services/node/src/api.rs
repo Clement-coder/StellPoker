@@ -345,6 +345,10 @@ pub async fn post_generate(
     let session_lock_bg = session_lock.clone();
     drop(session); // release write lock before spawning
 
+    let metrics = state.metrics.clone();
+    metrics.active_sessions.inc();
+    let circuit_label = circuit_name.clone();
+
     tokio::spawn(async move {
         let proof_future = session::run_proof_generation(
             sid.clone(),
@@ -376,22 +380,55 @@ pub async fn post_generate(
             proof_future.await
         };
 
+        metrics.active_sessions.dec();
+
         let mut session = session_lock_bg.write().await;
         match result {
             Ok((proof_bytes, public_inputs)) => {
                 let proof_path = work_dir.join("proof.bin");
                 if let Err(e) = std::fs::write(&proof_path, &proof_bytes) {
+                    metrics
+                        .session_errors
+                        .with_label_values(&["write_proof"])
+                        .inc();
                     session.status = SessionStatus::Failed(format!("write proof: {}", e));
+                    tracing::error!(
+                        session_id = %sid,
+                        phase = "write_proof",
+                        node_id,
+                        "failed to write proof to disk: {}",
+                        e
+                    );
                     return;
                 }
                 session.proof_path = Some(proof_path);
                 session.public_inputs = Some(public_inputs);
                 session.status = SessionStatus::Complete;
-                tracing::info!("[{}] Proof generation complete (node {})", sid, node_id);
+                metrics
+                    .proofs_generated
+                    .with_label_values(&[&circuit_label])
+                    .inc();
+                tracing::info!(
+                    session_id = %sid,
+                    phase = "complete",
+                    node_id,
+                    circuit = %circuit_label,
+                    "proof generation complete"
+                );
             }
             Err(e) => {
+                metrics
+                    .session_errors
+                    .with_label_values(&["proof_generation"])
+                    .inc();
                 session.status = SessionStatus::Failed(e.clone());
-                tracing::error!("[{}] Proof generation failed: {}", sid, e);
+                tracing::error!(
+                    session_id = %sid,
+                    phase = "proof_generation",
+                    node_id,
+                    error = %e,
+                    "proof generation failed"
+                );
             }
         }
     });

@@ -24,6 +24,15 @@ pub struct SorobanConfig {
     pub network_passphrase: String,
     pub onchain_table_id: Option<u32>,
     pub player_identities: Vec<(String, String)>,
+    /// Stake (in the configured token's smallest unit) a rotated committee
+    /// identity registers with when `key_rotation` cuts over to it.
+    pub committee_member_min_stake: i128,
+    /// MPC node HTTP endpoint advertised when (re-)registering the committee
+    /// identity after a key rotation.
+    pub committee_member_endpoint: String,
+    /// Geographic region advertised when (re-)registering the committee
+    /// identity after a key rotation.
+    pub committee_member_region: String,
 }
 
 impl SorobanConfig {
@@ -58,6 +67,14 @@ impl SorobanConfig {
                 .or_else(|| std::env::var("TABLE_ID").ok())
                 .and_then(|s| s.parse().ok()),
             player_identities,
+            committee_member_min_stake: std::env::var("COMMITTEE_MEMBER_MIN_STAKE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            committee_member_endpoint: std::env::var("COMMITTEE_MEMBER_ENDPOINT")
+                .unwrap_or_default(),
+            committee_member_region: std::env::var("COMMITTEE_MEMBER_REGION")
+                .unwrap_or_else(|_| "us-east-1".to_string()),
         }
     }
 
@@ -195,6 +212,40 @@ pub(crate) async fn invoke_contract_with_source(
         .map_err(|e| format!("Failed to invoke stellar CLI: {}", e))
 }
 
+/// Like [`invoke_contract_with_source`], but targets the committee-registry
+/// contract instead of the poker-table contract. Used for committee
+/// membership operations (registration, deregistration, key rotation).
+pub(crate) async fn invoke_committee_registry_with_source(
+    config: &SorobanConfig,
+    source: &str,
+    contract_args: Vec<String>,
+) -> Result<std::process::Output, String> {
+    if config.committee_registry_contract.is_empty() {
+        return Err("Committee Registry contract address not configured".to_string());
+    }
+
+    let mut args: Vec<String> = vec![
+        "contract".to_string(),
+        "invoke".to_string(),
+        "--id".to_string(),
+        config.committee_registry_contract.clone(),
+        "--source".to_string(),
+        source.to_string(),
+        "--rpc-url".to_string(),
+        config.rpc_url.clone(),
+        "--network-passphrase".to_string(),
+        config.network_passphrase.clone(),
+        "--".to_string(),
+    ];
+    args.extend(contract_args);
+
+    Command::new("stellar")
+        .args(&args)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to invoke stellar CLI: {}", e))
+}
+
 pub(crate) async fn invoke_contract_with_source_retries(
     config: &SorobanConfig,
     source: &str,
@@ -286,7 +337,8 @@ pub async fn fetch_active_nodes_from_registry(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse members JSON: {}. Stdout: {}", e, stdout))
+    serde_json::from_str(&stdout)
+        .map_err(|e| format!("Failed to parse members JSON: {}. Stdout: {}", e, stdout))
 }
 
 pub(crate) fn parse_u32_value(value: &serde_json::Value) -> Option<u32> {
@@ -363,6 +415,9 @@ mod error_handling_tests {
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             onchain_table_id: None,
             player_identities: Vec::new(),
+            committee_member_min_stake: 0,
+            committee_member_endpoint: String::new(),
+            committee_member_region: "us-east-1".to_string(),
         }
     }
 
