@@ -43,6 +43,7 @@ mod api;
 mod api_version;
 mod archiver;
 mod audit_log;
+mod circuit_pins;
 mod cors_db;
 pub mod crypto;
 mod dashboard;
@@ -363,6 +364,10 @@ struct TableSession {
     /// Timestamp when the current MPC operation started (epoch secs).
     #[serde(default)]
     mpc_operation_started: Option<u64>,
+    /// Circuit artifact hashes pinned at session start (circuit_name → sha256_hex).
+    /// Every proof submission verifies these to prevent mid-session artifact changes.
+    #[serde(default)]
+    pinned_artifact_hashes: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default)]

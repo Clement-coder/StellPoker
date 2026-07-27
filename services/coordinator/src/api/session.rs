@@ -295,6 +295,9 @@ fn build_session_from_onchain_state(
         proof_nonce: 0,
         mpc_node_progress: Vec::new(),
         mpc_operation_started: None,
+        // Rehydrated sessions have no pinned hashes — they will be re-pinned
+        // on the next deal. No proof generation happens until a new deal starts.
+        pinned_artifact_hashes: HashMap::new(),
     })
 }
 
