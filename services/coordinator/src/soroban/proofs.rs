@@ -474,6 +474,9 @@ mod error_handling_tests {
             network_passphrase: "Test SDF Network ; September 2015".to_string(),
             onchain_table_id: None,
             player_identities: Vec::new(),
+            committee_member_min_stake: 0,
+            committee_member_endpoint: String::new(),
+            committee_member_region: "us-east-1".to_string(),
         }
     }
 

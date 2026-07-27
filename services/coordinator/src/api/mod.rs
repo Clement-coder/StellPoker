@@ -446,7 +446,15 @@ pub async fn request_deal(
     .await
     .map_err(|e| {
         tracing::error!("Deal proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: a committee node that went down mid-session can't be
+        // recovered by retrying this same session (REP3 needs all 3 original
+        // share-holders) — signal the caller to start a fresh deal instead of
+        // a generic gateway error.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let parsed_deal =
@@ -622,7 +630,12 @@ pub async fn request_reveal(
     .await
     .map_err(|e| {
         tracing::error!("Reveal proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: see the deal-proof call site above.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let num_revealed = match phase.as_str() {
@@ -779,7 +792,12 @@ pub async fn request_showdown(
     .await
     .map_err(|e| {
         tracing::error!("Showdown proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: see the deal-proof call site above.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let parsed_showdown =

@@ -1,5 +1,3 @@
-mod crypto;
-
 //! Stellar Poker MPC Node
 //!
 //! Each node is a participant in the REP3 MPC protocol via TACEO's co-noir.
@@ -26,6 +24,8 @@ mod crypto;
 //! When a pin is set, the node demands mutual TLS (mTLS) and rejects any
 //! connection whose client certificate does not match the pin.
 
+mod crypto;
+
 use axum::{
     routing::{get, post},
     Router,
@@ -36,12 +36,14 @@ use tokio::sync::RwLock;
 
 mod api;
 mod limits;
+mod metrics;
 mod private_table;
 mod session;
 mod tls;
 mod heartbeat;
 
 use limits::ResourceLimits;
+use metrics::NodeMetrics;
 use private_table::PrivateTableState;
 use session::MpcSessionState;
 
@@ -54,6 +56,8 @@ pub struct NodeState {
     pub peer_http_endpoints: Vec<String>,
     /// Per-node resource ceilings guarding against exhaustion / session flooding.
     pub limits: ResourceLimits,
+    /// Prometheus metrics: active sessions, proofs generated, error counts (Issue #101).
+    pub metrics: NodeMetrics,
 }
 
 #[tokio::main]
@@ -121,10 +125,12 @@ async fn main() {
         party_config_path,
         peer_http_endpoints,
         limits,
+        metrics: NodeMetrics::new(),
     };
 
     let app = Router::new()
         .route("/health", get(|| async { "ok" }))
+        .route("/metrics", get(metrics::metrics_endpoint))
         .route(
             "/table/:table_id/prepare-deal",
             post(api::post_prepare_deal),
@@ -196,8 +202,8 @@ async fn serve_tls(
     use hyper_util::{
         rt::{TokioExecutor, TokioIo},
         server::conn::auto::Builder,
+        service::TowerToHyperService,
     };
-    use tower::Service as _;
 
     loop {
         let (tcp_stream, remote_addr) = match listener.accept().await {
@@ -210,7 +216,7 @@ async fn serve_tls(
 
         let acceptor = acceptor.clone();
         // Clone the Axum Router (it is cheap — backed by Arc).
-        let mut svc = app.clone();
+        let svc = app.clone();
 
         tokio::spawn(async move {
             let tls_stream = match acceptor.accept(tcp_stream).await {
@@ -228,16 +234,10 @@ async fn serve_tls(
             };
             tracing::debug!("TLS connection accepted from {}", remote_addr);
             let io = TokioIo::new(tls_stream);
-
-            // Poll the service so it is ready before handing it to hyper.
-            if let Err(e) = std::future::poll_fn(|cx| svc.poll_ready(cx)).await {
-                tracing::warn!(
-                    "Axum service not ready for {}: {}",
-                    remote_addr,
-                    e
-                );
-                return;
-            }
+            // Axum's Router implements tower::Service, not hyper::service::Service
+            // directly; adapt it so hyper-util's connection builder can drive it.
+            // Readiness is handled internally per-request via `Oneshot`.
+            let svc = TowerToHyperService::new(svc);
 
             if let Err(e) = Builder::new(TokioExecutor::new())
                 .serve_connection(io, svc)

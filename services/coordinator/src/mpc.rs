@@ -27,6 +27,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::node_reliability;
 
+/// Whether an error returned from this module means a committee node is
+/// down for the rest of the session (as opposed to a generic/application
+/// error) — see the `NODE_UNAVAILABLE:` marker set in
+/// `trigger_and_collect_proof` (Issue #96). Callers use this to tell a
+/// caller "retry the same session" apart from "this session can't recover,
+/// start a fresh deal".
+pub fn is_node_unavailable_error(error: &str) -> bool {
+    error.contains("NODE_UNAVAILABLE")
+}
+
 // ── TLS client factory ────────────────────────────────────────────────────────
 
 /// Build the shared `reqwest::Client` used for all coordinator → MPC node calls.
@@ -608,6 +618,17 @@ async fn trigger_and_collect_proof(
     // Node expects CRS directory (it appends bn254_g1.dat internally).
     let crs_dir = std::env::var("CRS_DIR").unwrap_or_else(|_| "./crs".to_string());
 
+    // Honest-majority fault tolerance (Issue #96): a node that fails to
+    // accept the generate trigger gets a few quick retries first, since a
+    // brief blip (restart-in-place, transient network hiccup) shouldn't
+    // sink an otherwise-healthy session — this mirrors the retry already
+    // done for the co-noir subprocess itself (session.rs) and for Soroban
+    // invokes (soroban/mod.rs). Only *connection-level* failures are
+    // retried/reclassified this way: an HTTP error status means the node is
+    // up and rejected the request, which is a different (likely
+    // application-level) problem that retrying won't fix.
+    const TRIGGER_RETRY_ATTEMPTS: u32 = 3;
+
     let mut handles = Vec::new();
     for (i, endpoint) in node_endpoints.iter().enumerate() {
         let url = format!("{}/session/{}/generate", endpoint, session_id);
@@ -615,28 +636,63 @@ async fn trigger_and_collect_proof(
         let circuit_dir = circuit_dir.to_string();
         let crs_dir = crs_dir.clone();
         let handle = tokio::spawn(async move {
-            let resp = client
-                .post(&url)
-                .json(&serde_json::json!({
-                    "circuit_dir": circuit_dir,
-                    "crs_path": crs_dir,
-                }))
-                .send()
-                .await
-                .map_err(|e| format!("failed to trigger node {}: {}", i, e))?;
+            let mut last_conn_error: Option<String> = None;
+            for attempt in 1..=TRIGGER_RETRY_ATTEMPTS {
+                let resp = client
+                    .post(&url)
+                    .json(&serde_json::json!({
+                        "circuit_dir": circuit_dir,
+                        "crs_path": crs_dir,
+                    }))
+                    .send()
+                    .await;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "unable to read response body".to_string());
-                return Err(format!(
-                    "node {} trigger failed: HTTP {}: {}",
-                    i, status, body
-                ));
+                let resp = match resp {
+                    Ok(r) => r,
+                    Err(e) => {
+                        tracing::warn!(
+                            node_index = i,
+                            attempt,
+                            max_attempts = TRIGGER_RETRY_ATTEMPTS,
+                            error = %e,
+                            "MPC node unreachable triggering generate; retrying"
+                        );
+                        last_conn_error = Some(e.to_string());
+                        if attempt < TRIGGER_RETRY_ATTEMPTS {
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                200 * attempt as u64,
+                            ))
+                            .await;
+                        }
+                        continue;
+                    }
+                };
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "unable to read response body".to_string());
+                    return Err(format!(
+                        "node {} trigger failed: HTTP {}: {}",
+                        i, status, body
+                    ));
+                }
+                return Ok::<(), String>(());
             }
-            Ok::<(), String>(())
+
+            // Every attempt failed to even connect: this node is down for
+            // the rest of the session, not just slow. Mark it so callers
+            // (api/mod.rs) can tell the difference between "retry the same
+            // session" and "this session is dead, start a fresh deal" —
+            // see `is_node_unavailable_error`.
+            Err(format!(
+                "NODE_UNAVAILABLE: node {} unreachable after {} attempts triggering generate: {}",
+                i,
+                TRIGGER_RETRY_ATTEMPTS,
+                last_conn_error.unwrap_or_default()
+            ))
         });
         handles.push(handle);
     }
@@ -808,6 +864,33 @@ mod error_handling_tests {
             .await
             .unwrap_err();
         assert!(err.contains("no MPC node endpoints configured"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn trigger_marks_unreachable_node_as_node_unavailable() {
+        // Issue #96: a node that never even accepts the connection (as
+        // opposed to one that responds with an HTTP error) is down for the
+        // rest of the session — the error must be recognizable via
+        // `is_node_unavailable_error` so callers know to start a fresh deal
+        // rather than retry the same (now-impossible) session.
+        let endpoints = vec![
+            DEAD_NODE.to_string(),
+            DEAD_NODE.to_string(),
+            DEAD_NODE.to_string(),
+        ];
+        let err = trigger_and_collect_proof(&test_client(), "sess", "deal_valid", "/circuits", &endpoints)
+            .await
+            .unwrap_err();
+        assert!(is_node_unavailable_error(&err), "got: {err}");
+    }
+
+    #[test]
+    fn is_node_unavailable_error_only_matches_the_marker() {
+        assert!(is_node_unavailable_error(
+            "NODE_UNAVAILABLE: node 1 unreachable after 3 attempts triggering generate: connect error"
+        ));
+        assert!(!is_node_unavailable_error("node 1 trigger failed: HTTP 500: internal error"));
+        assert!(!is_node_unavailable_error("proof generation timed out after 300 seconds"));
     }
 
     #[tokio::test]
