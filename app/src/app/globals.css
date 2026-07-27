@@ -419,3 +419,26 @@ input[type="text"]:focus {
 .animate-float-up {
   animation: floatUp 3s ease-out forwards;
 }
+
+/* Responsive Card Sizing and Container Queries (#52) */
+@container (max-width: 640px) {
+  .card-responsive {
+    transform: scale(0.85);
+    transform-origin: center center;
+  }
+}
+@media (max-width: 640px) {
+  .card-responsive {
+    max-width: 100%;
+    transform: scale(0.85);
+    transform-origin: center center;
+  }
+}
+@media (max-width: 480px) {
+  .card-responsive {
+    max-width: 100%;
+    transform: scale(0.72);
+    transform-origin: center center;
+  }
+}
+

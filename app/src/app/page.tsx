@@ -357,10 +357,15 @@ export default function Home() {
             fontFamily: "'Press Start 2P', monospace",
           }}
         >
-          ←
         </button>
 
-{/* Wallet indicator moved below main panel — see after screen content */}
+        {/* Admin Dashboard Navigation link (#29) */}
+        <Link
+          href="/admin"
+          className="absolute top-6 right-6 z-20 text-[10px] px-3 py-2 border border-[#8b6914] bg-[#1a120c] text-[#f1c40f] hover:bg-[#8b6914] hover:text-white transition"
+        >
+          🛡️ ADMIN
+        </Link>
 
         {/* Logo area */}
         <div className="text-center">

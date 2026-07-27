@@ -393,3 +393,11 @@ export function CreateTableButton() {
   return <button>Create Solo Table</button>;
 }
 ```
+
+### Documentation & Guides
+
+- [Developer Tutorial: Building Card Games with `stellar-zk-cards`](docs/tutorial-card-game.md)
+- [Noir Testing Guide](docs/NOIR_TESTING_GUIDE.md)
+- [Local Committee Development Guide](docs/local-committee-dev-guide.md)
+- [Soroban Storage Optimization](docs/soroban-storage-optimization.md)
+
