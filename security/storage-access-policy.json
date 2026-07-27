@@ -98,6 +98,31 @@
           "auth_model": "member_require_auth",
           "admin_multisig_required": false
         },
+        "RegistryKey::FeePool": {
+          "authorized_functions": ["deposit_rake", "distribute_fees"],
+          "auth_model": "depositor_require_auth_or_permissionless_split",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::PendingReward": {
+          "authorized_functions": ["distribute_fees", "withdraw_rewards"],
+          "auth_model": "permissionless_split_or_member_require_auth",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::PendingTotal": {
+          "authorized_functions": ["distribute_fees", "withdraw_rewards"],
+          "auth_model": "permissionless_split_or_member_require_auth",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::TotalDistributed": {
+          "authorized_functions": ["distribute_fees"],
+          "auth_model": "permissionless_split",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::MinWithdrawal": {
+          "authorized_functions": ["set_min_withdrawal"],
+          "auth_model": "stored_admin_require_auth",
+          "admin_multisig_required": true
+        },
         "RegistryKey::Epoch": {
           "authorized_functions": ["create_epoch"],
           "auth_model": "stored_admin_require_auth",
