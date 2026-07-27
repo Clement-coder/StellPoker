@@ -194,6 +194,9 @@ fn build_preflop_state(
             game_hub: game_hub.clone(),
             rake_bps: 0,
             max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         },
         phase: GamePhase::Preflop,
         players,
@@ -212,6 +215,7 @@ fn build_preflop_state(
         rake_balance: 0,
         action_deadline: 0,
         hand_actions: Vec::new(env),
+        jackpot_balance: 0,
     };
 
     // Same blind placement and UTG calculation as the public contract:

@@ -67,6 +67,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -87,6 +95,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -263,6 +287,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -283,6 +315,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -459,6 +507,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -479,6 +535,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -655,6 +727,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -675,6 +755,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -851,6 +947,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -871,6 +975,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -1047,6 +1167,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -1067,6 +1195,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -1243,6 +1387,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -1263,6 +1415,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -1439,6 +1607,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -1459,6 +1635,22 @@
                       },
                       "val": {
                         "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -1792,6 +1984,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -1812,6 +2012,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -1935,6 +2151,14 @@
                     },
                     "val": {
                       "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -2174,6 +2398,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -2194,6 +2426,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -2317,6 +2565,14 @@
                     },
                     "val": {
                       "u32": 1
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -2556,6 +2812,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -2576,6 +2840,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -2699,6 +2979,14 @@
                     },
                     "val": {
                       "u32": 2
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -2938,6 +3226,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -2958,6 +3254,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -3081,6 +3393,14 @@
                     },
                     "val": {
                       "u32": 3
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -3320,6 +3640,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -3340,6 +3668,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -3463,6 +3807,14 @@
                     },
                     "val": {
                       "u32": 4
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -3702,6 +4054,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -3722,6 +4082,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -3845,6 +4221,14 @@
                     },
                     "val": {
                       "u32": 5
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -4084,6 +4468,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -4104,6 +4496,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -4227,6 +4635,14 @@
                     },
                     "val": {
                       "u32": 6
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -4466,6 +4882,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -4486,6 +4910,22 @@
                           },
                           "val": {
                             "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -4609,6 +5049,14 @@
                     },
                     "val": {
                       "u32": 7
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
