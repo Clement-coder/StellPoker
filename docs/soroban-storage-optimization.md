@@ -204,6 +204,8 @@ Is the data read on nearly every call?
 | `NextTableId` | Instance | Read on `create_table` only — small, cheap |
 | `Table(table_id)` | Persistent | Large struct; table-specific; must outlive the session |
 | `RakeBalance(table_id)` | Persistent | Separate from `TableState` to allow cheap rake reads |
+| `HandRecord(table_id, slot)` | Persistent | One key per archived hand, so settling writes a single record regardless of history depth |
+| `HandHistoryMeta(table_id)` | Persistent | Circular-buffer cursor; read on archive and on every history query |
 | Verification key (VK) | Persistent (in zk-verifier) | Large (~KB); rarely changes |
 | Committee epoch | Persistent (in committee-registry) | Epoch-scoped; managed separately |
 

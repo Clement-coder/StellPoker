@@ -552,6 +552,14 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "admin"
                     },
                     "val": {
@@ -728,6 +736,103 @@
                     },
                     "val": {
                       "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "10"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Call"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "5"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Call"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 2
+                              }
+                            }
+                          ]
+                        }
+                      ]
                     }
                   },
                   {

@@ -2,6 +2,7 @@ use soroban_sdk::{Env, Symbol, Vec};
 
 use crate::constant_time;
 use crate::game_hub;
+use crate::history;
 use crate::pot;
 use crate::types::*;
 
@@ -41,6 +42,7 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     table.dealt_indices = Vec::new(env);
     table.hand_commitments = Vec::new(env);
     table.side_pots = Vec::new(env);
+    history::reset_actions(env, table);
 
     // Transition to dealing phase (committee will shuffle + deal)
     table.phase = GamePhase::Dealing;
@@ -127,6 +129,8 @@ pub fn settle_showdown(
     table.pot = 0;
     table.phase = GamePhase::Settlement;
     table.last_action_ledger = env.ledger().sequence();
+
+    history::archive_hand(env, table, &payouts, total_pot, rake, true)?;
 
     // Notify game hub: player1_won = true if the proved winner is seat 0.
     let player1_won = constant_time::u32_eq(winner_seat, 0);
@@ -219,6 +223,10 @@ pub fn settle_fold_win(env: &Env, table: &mut TableState) -> Result<(), PokerTab
         table.rake_balance += rake;
         table.phase = GamePhase::Settlement;
         table.last_action_ledger = env.ledger().sequence();
+
+        let mut payouts: Vec<(u32, i128)> = Vec::new(env);
+        payouts.push_back((winner_seat, winnings));
+        history::archive_hand(env, table, &payouts, total_pot, rake, false)?;
 
         // Notify game hub
         let player1_won = constant_time::u32_eq(winner_seat, 0);

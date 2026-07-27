@@ -1152,4 +1152,187 @@ mod test {
         let seat = join_player(&s, table_id, &player, 500);
         assert_eq!(seat, 0);
     }
+
+    // ---------------------------------------------------------------------------
+    // Hand history (#71)
+    // ---------------------------------------------------------------------------
+
+    /// Play one heads-up hand that ends with a fold, leaving the table in
+    /// Settlement and one hand in the history buffer.
+    fn play_fold_hand(s: &TestSetup, table_id: u32) {
+        s.client.start_hand(&table_id);
+        let n = s.client.get_table(&table_id).players.len();
+        commit_mock_deal(s, table_id, n);
+
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+    }
+
+    #[test]
+    fn test_hand_history_records_settled_hand() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        assert_eq!(s.client.get_hand_history(&table_id, &0).len(), 0);
+
+        play_fold_hand(&s, table_id);
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), 1);
+
+        let record = history.get(0).unwrap();
+        assert_eq!(record.hand_number, 1);
+        assert_eq!(record.players.len(), 2);
+        assert!(!record.showdown, "fold win is not a showdown");
+        assert_eq!(record.total_pot, 15); // sb 5 + bb 10
+        assert_eq!(record.rake, 0);
+
+        // The whole pot goes to the one seat still standing.
+        assert_eq!(record.payouts.len(), 1);
+        let payout = record.payouts.get(0).unwrap();
+        assert_eq!(payout.amount, 15);
+
+        // The fold that ended the hand is in the action summary.
+        assert_eq!(record.actions.len(), 1);
+        let action = record.actions.get(0).unwrap();
+        assert_eq!(action.kind, ActionKind::Fold);
+        assert_eq!(action.amount, 0);
+        assert_eq!(action.phase, GamePhase::Preflop);
+    }
+
+    #[test]
+    fn test_hand_history_is_newest_first_and_queryable_by_number() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        for _ in 0..3 {
+            play_fold_hand(&s, table_id);
+        }
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), 3);
+        assert_eq!(history.get(0).unwrap().hand_number, 3);
+        assert_eq!(history.get(1).unwrap().hand_number, 2);
+        assert_eq!(history.get(2).unwrap().hand_number, 1);
+
+        // A limit pages in only the latest entries.
+        let latest = s.client.get_hand_history(&table_id, &2);
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest.get(0).unwrap().hand_number, 3);
+
+        // Direct lookup by hand number.
+        let hand2 = s.client.get_hand(&table_id, &2).unwrap();
+        assert_eq!(hand2.hand_number, 2);
+        assert!(s.client.get_hand(&table_id, &99).is_none());
+
+        let meta = s.client.get_hand_history_meta(&table_id);
+        assert_eq!(meta.stored, 3);
+        assert_eq!(meta.total_archived, 3);
+    }
+
+    #[test]
+    fn test_hand_history_buffer_evicts_oldest() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        let capacity = s.client.hand_history_capacity();
+        for _ in 0..(capacity + 2) {
+            play_fold_hand(&s, table_id);
+        }
+
+        let meta = s.client.get_hand_history_meta(&table_id);
+        assert_eq!(meta.stored, capacity, "buffer never grows past capacity");
+        assert_eq!(meta.total_archived, capacity + 2);
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), capacity);
+        assert_eq!(history.get(0).unwrap().hand_number, capacity + 2);
+
+        // The two oldest hands have been overwritten.
+        assert!(s.client.get_hand(&table_id, &1).is_none());
+        assert!(s.client.get_hand(&table_id, &2).is_none());
+        assert!(s.client.get_hand(&table_id, &3).is_some());
+    }
+
+    #[test]
+    fn test_hand_history_records_bets_and_rake() {
+        let s = setup();
+        let config = rake_config(&s.env, &s.token.address, &s.committee, &s.verifier, 500); // 5%
+        let table_id = s.client.create_table(&s.admin, &config);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 5000);
+        join_player(&s, table_id, &p2, 5000);
+
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+
+        // The small blind raises (a call would end the round outright heads-up),
+        // then the big blind folds and the hand settles.
+        let table = s.client.get_table(&table_id);
+        let raiser = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &raiser.address, &Action::Raise(200));
+
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+
+        let record = s.client.get_hand(&table_id, &1).unwrap();
+        assert_eq!(record.actions.len(), 2);
+
+        let raise = record.actions.get(0).unwrap();
+        assert_eq!(raise.kind, ActionKind::Raise);
+        // 100 to call the big blind plus the 200 raise on top.
+        assert_eq!(raise.amount, 300);
+
+        let fold = record.actions.get(1).unwrap();
+        assert_eq!(fold.kind, ActionKind::Fold);
+        assert_eq!(fold.amount, 0);
+
+        // Pot is 600 (SB 100 + BB 200 + the 300 raise); rake is 5%.
+        assert_eq!(record.total_pot, 600);
+        assert_eq!(record.rake, 30);
+        assert_eq!(record.payouts.get(0).unwrap().amount, 570);
+    }
+
+    #[test]
+    fn test_hand_history_is_per_table() {
+        let s = setup();
+        let table_a = create_default_table(&s);
+        let table_b = create_default_table(&s);
+
+        for table_id in [table_a, table_b] {
+            let p1 = Address::generate(&s.env);
+            let p2 = Address::generate(&s.env);
+            join_player(&s, table_id, &p1, 500);
+            join_player(&s, table_id, &p2, 500);
+        }
+
+        play_fold_hand(&s, table_a);
+        play_fold_hand(&s, table_a);
+        play_fold_hand(&s, table_b);
+
+        assert_eq!(s.client.get_hand_history(&table_a, &0).len(), 2);
+        assert_eq!(s.client.get_hand_history(&table_b, &0).len(), 1);
+    }
 }

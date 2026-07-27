@@ -9,6 +9,7 @@ mod game;
 mod game_hub;
 #[cfg(test)]
 mod gas_regression_test;
+mod history;
 #[cfg(test)]
 mod invariants_test;
 #[cfg(test)]
@@ -179,6 +180,7 @@ impl PokerTableContract {
             session_id: 0,
             rake_balance: 0,
             action_deadline: 0,
+            hand_actions: Vec::new(&env),
         };
 
         save_table(&env, &table);
@@ -287,7 +289,31 @@ impl PokerTableContract {
         if !found {
             return Err(PokerTableError::PlayerNotAtTable);
         }
+
+        // Renumber the remaining seats so `seat_index` keeps matching the
+        // player's position in the vector. Betting, side-pot eligibility and
+        // the showdown proof's seat-indexed public outputs all treat the two as
+        // the same number, so a gap left by the departing player would send
+        // actions and payouts to the wrong seat. Leaving is only allowed
+        // between hands, so no pot state depends on the old numbering.
+        for i in 0..new_players.len() {
+            let mut p = new_players
+                .get(i)
+                .ok_or(PokerTableError::InvalidPlayerIndex)?;
+            p.seat_index = i;
+            new_players.set(i, p);
+        }
         table.players = new_players;
+
+        // Keep the button and the turn pointer inside the shrunken table.
+        let remaining = table.players.len() as u32;
+        if remaining == 0 {
+            table.dealer_seat = 0;
+            table.current_turn = 0;
+        } else {
+            table.dealer_seat %= remaining;
+            table.current_turn %= remaining;
+        }
 
         save_table(&env, &table);
 
@@ -610,6 +636,38 @@ impl PokerTableContract {
     /// Read current table state (view function).
     pub fn get_table(env: Env, table_id: u32) -> Result<TableState, PokerTableError> {
         load_table(&env, table_id)
+    }
+
+    // ========================================================================
+    // Hand History (read-only)
+    // ========================================================================
+
+    /// Read the most recently completed hands, newest first.
+    ///
+    /// The table keeps a circular buffer of the last
+    /// `history::HAND_HISTORY_CAPACITY` settled hands. Pass `limit = 0` to read
+    /// every retained record, or a smaller number to page in just the latest
+    /// few. Hands older than the window have been overwritten and are only
+    /// recoverable from the `hand_archived` event stream.
+    pub fn get_hand_history(env: Env, table_id: u32, limit: u32) -> Vec<HandRecord> {
+        history::get_history(&env, table_id, limit)
+    }
+
+    /// Read a single archived hand by its hand number. Returns `None` once the
+    /// hand has been evicted from the circular buffer.
+    pub fn get_hand(env: Env, table_id: u32, hand_number: u32) -> Option<HandRecord> {
+        history::get_hand(&env, table_id, hand_number)
+    }
+
+    /// Bookkeeping for a table's hand-history buffer: how many records are
+    /// retained right now and how many hands have been archived in total.
+    pub fn get_hand_history_meta(env: Env, table_id: u32) -> HandHistoryMeta {
+        history::load_meta(&env, table_id)
+    }
+
+    /// Number of hands the history buffer can hold before it starts evicting.
+    pub fn hand_history_capacity() -> u32 {
+        history::HAND_HISTORY_CAPACITY
     }
 
     // ========================================================================

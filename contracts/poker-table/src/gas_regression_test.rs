@@ -146,7 +146,7 @@ fn mock_deal(g: &G, table_id: u32, n: u32) {
 fn measure<F: FnOnce()>(g: &G, f: F) -> u64 {
     g.env.cost_estimate().budget().reset_unlimited();
     f();
-    g.env.cost_estimate().budget().cpu_instruction_count()
+    g.env.cost_estimate().budget().cpu_instruction_cost()
 }
 
 fn check(label: &str, cost: u64, budget: u64) {

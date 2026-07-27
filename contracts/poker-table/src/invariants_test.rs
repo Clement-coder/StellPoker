@@ -111,6 +111,8 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
         committee: admin,
         session_id: 0,
         rake_balance: 0,
+        action_deadline: 0,
+        hand_actions: Vec::new(env),
     };
     (table, total)
 }
