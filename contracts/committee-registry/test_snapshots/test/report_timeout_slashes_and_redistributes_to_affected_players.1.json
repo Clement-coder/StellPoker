@@ -42,6 +42,9 @@
                 },
                 {
                   "i128": "1000"
+                },
+                {
+                  "u32": 100
                 }
               ]
             }
@@ -92,6 +95,9 @@
                 },
                 {
                   "string": "us-east-1"
+                },
+                {
+                  "u32": 1000
                 }
               ]
             }
@@ -370,10 +376,26 @@
                   },
                   {
                     "key": {
+                      "symbol": "fee_rate_bps"
+                    },
+                    "val": {
+                      "u32": 1000
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "region"
                     },
                     "val": {
                       "string": "us-east-1"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "rewards_per_stake"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -390,6 +412,14 @@
                     },
                     "val": {
                       "i128": "500"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "total_delegated_stake"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   }
                 ]
@@ -441,6 +471,18 @@
                             "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                           }
                         ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "DelegationCooldown"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 100
                       }
                     },
                     {
