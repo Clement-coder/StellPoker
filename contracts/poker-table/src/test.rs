@@ -62,8 +62,7 @@ mod test {
             token: token.clone(),
             min_buy_in: 100,
             max_buy_in: 1000,
-            small_blind: 5,
-            big_blind: 10,
+            blinds_schedule: BlindsSchedule::fixed(env, 5, 10),
             min_players: 2,
             max_players: 6,
             timeout_ledgers: 100,
@@ -134,8 +133,7 @@ mod test {
             token: token.clone(),
             min_buy_in: 100,
             max_buy_in: 100_000,
-            small_blind: 100,
-            big_blind: 200,
+            blinds_schedule: BlindsSchedule::fixed(env, 100, 200),
             min_players: 2,
             max_players: 6,
             timeout_ledgers: 100,
@@ -196,8 +194,9 @@ mod test {
         assert_eq!(table.admin, s.admin);
         assert_eq!(table.config.min_buy_in, 100);
         assert_eq!(table.config.max_buy_in, 1000);
-        assert_eq!(table.config.small_blind, 5);
-        assert_eq!(table.config.big_blind, 10);
+        let level = table.config.blinds_schedule.levels.get(0).unwrap();
+        assert_eq!(level.small_blind, 5);
+        assert_eq!(level.big_blind, 10);
         assert_eq!(table.config.min_players, 2);
         assert_eq!(table.config.max_players, 6);
         assert_eq!(table.phase, GamePhase::Waiting);
@@ -293,8 +292,10 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "Error(Contract, #3)")]
-    fn test_join_table_above_max_players_rejected() {
+    fn test_join_table_above_max_players_queues_instead_of_erroring() {
+        // Joining a full table no longer errors — the player is queued
+        // instead (see the waiting-list feature), with their buy-in
+        // escrowed immediately so they can be auto-seated later.
         let s = setup();
         let config = TableConfig {
             max_players: 2,
@@ -308,7 +309,13 @@ mod test {
         }
 
         let extra = Address::generate(&s.env);
-        join_player(&s, table_id, &extra, 500);
+        let position = join_player(&s, table_id, &extra, 500);
+        assert_eq!(position, 0); // first queue slot, not a seat index
+
+        assert_eq!(s.client.get_table(&table_id).players.len(), 2);
+        let queue = s.client.get_queue(&table_id);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.get(0).unwrap().player, extra);
     }
 
     // ---------------------------------------------------------------------------
@@ -974,8 +981,7 @@ mod test {
         // zero — the whole pot goes to the winner and no chips are burned.
         let s = setup();
         let config = TableConfig {
-            small_blind: 1,
-            big_blind: 2,
+            blinds_schedule: BlindsSchedule::fixed(&s.env, 1, 2),
             ..rake_config(&s.env, &s.token.address, &s.committee, &s.verifier, 100) // 1%
         };
         let table_id = s.client.create_table(&s.admin, &config);

@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, BytesN, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -6,8 +6,11 @@ pub struct TableConfig {
     pub token: Address, // Payment token (e.g., USDC)
     pub min_buy_in: i128,
     pub max_buy_in: i128,
-    pub small_blind: i128,
-    pub big_blind: i128,
+    /// Blinds/ante structure for this table. A single-level schedule with
+    /// `duration_seconds: 0` behaves as fixed blinds; multiple levels with
+    /// nonzero `duration_seconds` produce an escalating (tournament-style)
+    /// structure, optionally with an ante at any level.
+    pub blinds_schedule: BlindsSchedule,
     /// Minimum seated players required to start a hand.
     pub min_players: u32,
     /// Maximum seated players allowed at the table. Capped at 6.
@@ -34,6 +37,66 @@ pub struct TableConfig {
     /// Minimum rank of the quad / trips / card required within the
     /// qualifying category (e.g. `12` = Ace).
     pub min_bad_beat_rank: u32,
+}
+
+/// A single blinds/ante level in a table's schedule.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BlindLevel {
+    pub small_blind: i128,
+    pub big_blind: i128,
+    /// Ante collected from every seated player at the start of each hand
+    /// while this level is active. `0` means no ante.
+    pub ante: i128,
+    /// How long this level lasts once active, in seconds, before the
+    /// schedule advances to the next level. Ignored on the final level
+    /// (which lasts indefinitely once reached). `0` on a single-level
+    /// schedule means the level never advances (fixed blinds).
+    pub duration_seconds: u64,
+}
+
+/// Ordered blinds levels for a table. `levels[0]` is active from table
+/// creation; the active level advances by wall-clock time as hands are
+/// played (checked at the start of each new hand).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BlindsSchedule {
+    pub levels: Vec<BlindLevel>,
+}
+
+impl BlindsSchedule {
+    /// A single-level, non-escalating schedule: fixed blinds, no ante.
+    pub fn fixed(env: &Env, small_blind: i128, big_blind: i128) -> Self {
+        let mut levels = Vec::new(env);
+        levels.push_back(BlindLevel {
+            small_blind,
+            big_blind,
+            ante: 0,
+            duration_seconds: 0,
+        });
+        BlindsSchedule { levels }
+    }
+}
+
+/// A player waiting for a seat to open at a full table. `buy_in` has
+/// already been transferred into contract escrow at queue-join time, so no
+/// further authorization is needed from the player when they're auto-seated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct QueueEntry {
+    pub player: Address,
+    pub buy_in: i128,
+}
+
+/// A pending contract-wasm upgrade, committed to at `propose_upgrade` time
+/// and only executable once `execute_after` has passed. `execute_upgrade`
+/// always uses the hash stored here rather than one passed in again, so the
+/// executed upgrade is guaranteed to match what was originally proposed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposal {
+    pub new_wasm_hash: BytesN<32>,
+    pub execute_after: u64, // ledger timestamp (seconds)
 }
 
 #[contracterror]
@@ -93,6 +156,14 @@ pub enum PokerTableError {
     JackpotNotConfigured = 51,
     BadBeatHandDataInvalid = 52,
     StaleActionSequence = 53,
+    EmptyBlindsSchedule = 54,
+    InvalidBlindLevel = 55,
+    AlreadyQueued = 56,
+    NotQueued = 57,
+    QueueFull = 58,
+    NoUpgradeProposal = 59,
+    UpgradeDelayNotElapsed = 60,
+    UpgradeDelayTooShort = 61,
 }
 
 #[contracttype]
@@ -290,6 +361,11 @@ pub struct TableState {
     /// The next raise must be at least this large (standard poker minimum-raise
     /// rule). Cleared to `big_blind` when a new betting round begins.
     pub last_raise_size: i128,
+    /// Index into `config.blinds_schedule.levels` of the currently active
+    /// blinds level.
+    pub current_blind_level: u32,
+    /// Ledger timestamp (seconds) at which the current blind level began.
+    pub level_started_at: u64,
 }
 
 #[contracttype]
@@ -306,4 +382,6 @@ pub enum DataKey {
     /// Per-player per-table monotonically increasing action sequence counter.
     /// Used to reject stale or replayed betting actions.
     PlayerActionCounter(u32, Address),
+    Queue(u32),  // waiting-list queue for a full table
+    UpgradeProposal(u32),
 }

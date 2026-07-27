@@ -184,8 +184,7 @@ fn build_preflop_state(
             token: admin.clone(),
             min_buy_in: 0,
             max_buy_in: i128::MAX,
-            small_blind,
-            big_blind,
+            blinds_schedule: BlindsSchedule::fixed(env, small_blind, big_blind),
             min_players: 2,
             max_players: MAX_PLAYERS_PER_TABLE,
             timeout_ledgers: 0,
@@ -218,6 +217,8 @@ fn build_preflop_state(
         rit_state: None,
         jackpot_balance: 0,
         last_raise_size: big_blind,
+        current_blind_level: 0,
+        level_started_at: 0,
     };
 
     // Same blind placement and UTG calculation as the public contract:
@@ -288,6 +289,14 @@ fn phase_rank(phase: &GamePhase) -> u8 {
         GamePhase::River => 8,
         GamePhase::Showdown => 9,
         GamePhase::Settlement => 10,
+        // Run-It-Twice is an alternate path taken instead of the normal
+        // Showdown/Settlement sequence when two players go all-in heads-up.
+        // Both showdown runs occupy the same stage as the regular Showdown;
+        // the final pot split occupies the same stage as Settlement.
+        GamePhase::AwaitingRunItTwice => 9,
+        GamePhase::ShowdownRun1 => 9,
+        GamePhase::ShowdownRun2 => 9,
+        GamePhase::RitSettlement => 10,
         // `Dispute` is unreachable in the betting state machine and is
         // assigned the highest rank so any spurious transition fails the
         // monotonicity assertion loudly.
@@ -330,7 +339,9 @@ fn synthesize_legal_action(table: &TableState, intent: Intent) -> Action {
         .expect("current_turn in range");
     let bet = current_bet(table);
     let to_call = bet - curr.bet_this_round;
-    let bb = table.config.big_blind;
+    let bb = crate::game::current_blind_level(table)
+        .expect("valid blind level")
+        .big_blind;
     match intent {
         Intent::Fold => Action::Fold,
         Intent::AllIn => Action::AllIn,

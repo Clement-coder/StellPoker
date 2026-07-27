@@ -103,8 +103,7 @@ fn config(s: &Setup, player_count: u32, rake_bps: u32) -> TableConfig {
         token: s.token.address.clone(),
         min_buy_in: 100,
         max_buy_in: 2_000,
-        small_blind: 5,
-        big_blind: 10,
+        blinds_schedule: BlindsSchedule::fixed(&s.env, 5, 10),
         min_players: 2,
         max_players: player_count,
         timeout_ledgers: 100,
@@ -265,12 +264,15 @@ fn choose_action(table: &TableState, mv: &FuzzMove) -> Action {
             }
         }
         FuzzMove::Aggressive => {
-            if to_call > 0 && p.stack > to_call + table.config.big_blind {
-                Action::Raise(table.config.big_blind)
+            let big_blind = crate::game::current_blind_level(table)
+                .expect("valid blind level")
+                .big_blind;
+            if to_call > 0 && p.stack > to_call + big_blind {
+                Action::Raise(big_blind)
             } else if to_call > 0 {
                 Action::Call
-            } else if p.stack >= table.config.big_blind {
-                Action::Bet(table.config.big_blind)
+            } else if p.stack >= big_blind {
+                Action::Bet(big_blind)
             } else {
                 Action::AllIn
             }
