@@ -124,6 +124,20 @@ fn verify_hole_cards_against_proof(
     Ok(())
 }
 
+/// Find a seated player's index, or `PlayerNotAtTable`.
+fn find_seat(env: &Env, table: &TableState, player: &Address) -> Result<u32, PokerTableError> {
+    for i in 0..table.players.len() {
+        let p = table
+            .players
+            .get(i)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        if constant_time::address_eq(env, &p.address, player) {
+            return Ok(i);
+        }
+    }
+    Err(PokerTableError::PlayerNotAtTable)
+}
+
 fn derive_session_id(table_id: u32, hand_number: u32) -> u32 {
     // Deterministic 32-bit hash of (table_id, hand_number).
     let mut x = table_id ^ hand_number.rotate_left(16);
@@ -241,6 +255,8 @@ impl PokerTableContract {
             all_in: false,
             sitting_out: false,
             seat_index: seat,
+            total_buy_in: buy_in,
+            rebuy_count: 0,
         });
 
         save_table(&env, &table);
@@ -251,6 +267,110 @@ impl PokerTableContract {
         );
 
         Ok(seat)
+    }
+
+    /// Top a seated player's stack up by a partial amount.
+    ///
+    /// A rebuy may be for any amount that leaves the player's stack inside the
+    /// table's `[min_buy_in, max_buy_in]` band — it does not have to be a full
+    /// buy-in. A player who has been ground down to 40 chips at a 100/1000
+    /// table can add anywhere from 60 (back to the minimum) to 960 (up to the
+    /// maximum). A single rebuy may never exceed one full buy-in.
+    ///
+    /// Rebuys are only allowed between hands, so the chips cannot appear
+    /// mid-hand and change what an opponent is playing against. Each one is
+    /// counted against `TableConfig::max_rebuys` (0 = unlimited).
+    ///
+    /// Returns the player's new stack.
+    pub fn rebuy(
+        env: Env,
+        table_id: u32,
+        player: Address,
+        amount: i128,
+    ) -> Result<i128, PokerTableError> {
+        player.require_auth();
+        require_not_paused(&env, table_id)?;
+
+        let mut table = load_table(&env, table_id)?;
+
+        // Chips may only enter between hands — never while a hand is live.
+        if !matches!(table.phase, GamePhase::Waiting | GamePhase::Settlement) {
+            return Err(PokerTableError::CannotRebuyDuringActiveHand);
+        }
+
+        let seat = find_seat(&env, &table, &player)?;
+        let mut p = table
+            .players
+            .get(seat)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+
+        if table.config.max_rebuys > 0 && p.rebuy_count >= table.config.max_rebuys {
+            return Err(PokerTableError::RebuyLimitReached);
+        }
+
+        let new_stack = p.stack + amount;
+        if amount <= 0
+            || amount > table.config.max_buy_in
+            || new_stack > table.config.max_buy_in
+            || new_stack < table.config.min_buy_in
+        {
+            return Err(PokerTableError::InvalidRebuyAmount);
+        }
+
+        // Take the chips before crediting the stack.
+        let token = token::Client::new(&env, &table.config.token);
+        token.transfer(&player, &env.current_contract_address(), &amount);
+
+        p.stack = new_stack;
+        p.total_buy_in += amount;
+        p.rebuy_count += 1;
+        let rebuy_count = p.rebuy_count;
+        table.players.set(seat, p);
+
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "player_rebuy"), table_id),
+            (player, amount, new_stack, rebuy_count),
+        );
+
+        Ok(new_stack)
+    }
+
+    /// Chips a seated player has deposited this session (initial buy-in plus
+    /// every rebuy) and how many rebuys they have used.
+    pub fn get_player_buy_in(
+        env: Env,
+        table_id: u32,
+        player: Address,
+    ) -> Result<(i128, u32), PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        let seat = find_seat(&env, &table, &player)?;
+        let p = table
+            .players
+            .get(seat)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        Ok((p.total_buy_in, p.rebuy_count))
+    }
+
+    /// Update the per-session rebuy limit (admin only). `0` means unlimited.
+    /// Lowering the limit below what a player has already used simply stops
+    /// them rebuying again; it never claws chips back.
+    pub fn set_max_rebuys(
+        env: Env,
+        table_id: u32,
+        max_rebuys: u32,
+    ) -> Result<(), PokerTableError> {
+        let mut table = load_table(&env, table_id)?;
+        table.admin.require_auth();
+        table.config.max_rebuys = max_rebuys;
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "max_rebuys_updated"), table_id),
+            max_rebuys,
+        );
+        Ok(())
     }
 
     /// Leave the table and withdraw remaining stack.

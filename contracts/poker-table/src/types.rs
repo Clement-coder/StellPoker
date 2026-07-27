@@ -19,6 +19,10 @@ pub struct TableConfig {
     /// Rake taken from every pot, in basis points (100 = 1%). Capped at
     /// `MAX_RAKE_BPS` (500 = 5%); enforced on table creation.
     pub rake_bps: u32,
+    /// How many times a seated player may top their stack up during one
+    /// session at this table. `0` means unlimited. The counter resets when a
+    /// player leaves and rejoins.
+    pub max_rebuys: u32,
 }
 
 #[contracterror]
@@ -66,6 +70,9 @@ pub enum PokerTableError {
     ContractPaused = 39,
     ForceFoldNotAvailable = 40,
     TargetNotActive = 41,
+    CannotRebuyDuringActiveHand = 42,
+    RebuyLimitReached = 43,
+    InvalidRebuyAmount = 44,
 }
 
 #[contracttype]
@@ -82,6 +89,12 @@ pub struct PlayerState {
     pub all_in: bool,
     pub sitting_out: bool,
     pub seat_index: u32,
+    /// Every chip this player has deposited at the table this session — the
+    /// initial buy-in plus every rebuy. Used to compute session profit and to
+    /// audit chip conservation independently of the current stack.
+    pub total_buy_in: i128,
+    /// Rebuys used this session, checked against `TableConfig::max_rebuys`.
+    pub rebuy_count: u32,
 }
 
 #[contracttype]

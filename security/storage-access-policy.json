@@ -19,10 +19,22 @@
             "set_hub",
             "set_rake_bps",
             "set_min_players",
-            "withdraw_rake"
+            "set_max_rebuys",
+            "withdraw_rake",
+            "rebuy"
           ],
           "auth_model": "player_or_committee_or_admin_require_auth",
           "admin_multisig_required": true
+        },
+        "DataKey::HandRecord": {
+          "authorized_functions": ["player_action", "claim_timeout", "submit_showdown"],
+          "auth_model": "written_only_on_hand_settlement",
+          "admin_multisig_required": false
+        },
+        "DataKey::HandHistoryMeta": {
+          "authorized_functions": ["player_action", "claim_timeout", "submit_showdown"],
+          "auth_model": "written_only_on_hand_settlement",
+          "admin_multisig_required": false
         },
         "DataKey::Paused": {
           "authorized_functions": ["pause", "unpause"],

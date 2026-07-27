@@ -83,6 +83,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "min_buy_in"
                       },
                       "val": {
@@ -1310,6 +1318,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "min_buy_in"
                           },
                           "val": {
@@ -1566,6 +1582,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -1586,6 +1610,14 @@
                               },
                               "val": {
                                 "i128": "495"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "500"
                               }
                             }
                           ]
@@ -1634,6 +1666,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -1654,6 +1694,14 @@
                               },
                               "val": {
                                 "i128": "505"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "500"
                               }
                             }
                           ]

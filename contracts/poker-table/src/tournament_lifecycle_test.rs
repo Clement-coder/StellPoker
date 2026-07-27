@@ -276,6 +276,7 @@ fn test_tournament_lifecycle_4_players() {
         verifier: s.verifier.clone(),
         game_hub,
         rake_bps: 0,
+        max_rebuys: 0,
     };
     let table_id = s.client.create_table(&s.admin, &config);
 

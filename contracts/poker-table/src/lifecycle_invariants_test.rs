@@ -112,6 +112,7 @@ fn config(s: &Setup, player_count: u32, rake_bps: u32) -> TableConfig {
         verifier: s.verifier.clone(),
         game_hub,
         rake_bps,
+        max_rebuys: 0,
     }
 }
 

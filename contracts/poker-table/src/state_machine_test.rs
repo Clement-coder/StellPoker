@@ -172,6 +172,8 @@ fn build_preflop_state(
             all_in: false,
             sitting_out: false,
             seat_index: seat as u32,
+            total_buy_in: bi,
+            rebuy_count: 0,
         });
     }
 
@@ -191,6 +193,7 @@ fn build_preflop_state(
             verifier: admin.clone(),
             game_hub: game_hub.clone(),
             rake_bps: 0,
+            max_rebuys: 0,
         },
         phase: GamePhase::Preflop,
         players,

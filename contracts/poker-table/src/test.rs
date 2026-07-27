@@ -71,6 +71,7 @@ mod test {
             verifier: verifier.clone(),
             game_hub,
             rake_bps: 0,
+            max_rebuys: 0,
         }
     }
 
@@ -139,6 +140,7 @@ mod test {
             verifier: verifier.clone(),
             game_hub,
             rake_bps,
+            max_rebuys: 0,
         }
     }
 
@@ -1313,6 +1315,285 @@ mod test {
         assert_eq!(record.total_pot, 600);
         assert_eq!(record.rake, 30);
         assert_eq!(record.payouts.get(0).unwrap().amount, 570);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Partial buy-ins and rebuys (#75)
+    // ---------------------------------------------------------------------------
+
+    /// A table with `max_rebuys` configured. Buy-in band is the default
+    /// 100..=1000, so a rebuy has plenty of room between the two bounds.
+    fn rebuy_table(s: &TestSetup, max_rebuys: u32) -> u32 {
+        let mut config = default_config(&s.env, &s.token.address, &s.committee, &s.verifier);
+        config.max_rebuys = max_rebuys;
+        s.client.create_table(&s.admin, &config)
+    }
+
+    /// Mint `amount` to `player` and rebuy for it.
+    fn rebuy(s: &TestSetup, table_id: u32, player: &Address, amount: i128) -> i128 {
+        s.token_admin_client.mint(player, &amount);
+        s.client.rebuy(&table_id, player, &amount)
+    }
+
+    #[test]
+    fn test_rebuy_tops_up_a_partial_amount() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        // A partial top-up well under a full buy-in.
+        let new_stack = rebuy(&s, table_id, &player, 150);
+        assert_eq!(new_stack, 350);
+
+        let table = s.client.get_table(&table_id);
+        let p = table.players.get(0).unwrap();
+        assert_eq!(p.stack, 350);
+        assert_eq!(p.total_buy_in, 350);
+        assert_eq!(p.rebuy_count, 1);
+
+        // The chips actually moved into the contract.
+        assert_eq!(s.token.balance(&player), 0);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 350);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_rebuy_allows_repeated_partial_top_ups() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 100);
+
+        assert_eq!(rebuy(&s, table_id, &player, 50), 150);
+        assert_eq!(rebuy(&s, table_id, &player, 50), 200);
+        assert_eq!(rebuy(&s, table_id, &player, 800), 1000);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 1000);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_rebuy_respects_the_per_session_limit() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 2);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        rebuy(&s, table_id, &player, 100);
+        rebuy(&s, table_id, &player, 100);
+
+        s.token_admin_client.mint(&player, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &100)
+            .expect_err("third rebuy is over the limit");
+        assert_eq!(err, Ok(PokerTableError::RebuyLimitReached));
+    }
+
+    #[test]
+    fn test_rebuy_cannot_exceed_max_buy_in() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 900);
+
+        // 900 + 200 would put the stack over the 1000 maximum.
+        s.token_admin_client.mint(&player, &200);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &200)
+            .expect_err("rebuy past max_buy_in is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+
+        // Exactly reaching the maximum is fine.
+        assert_eq!(s.client.rebuy(&table_id, &player, &100), 1000);
+    }
+
+    #[test]
+    fn test_rebuy_must_reach_min_buy_in() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 100);
+        let other = Address::generate(&s.env);
+        join_player(&s, table_id, &other, 500);
+
+        // Lose the stack down to a stub, then try to top up below the minimum.
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+
+        let table = s.client.get_table(&table_id);
+        let short = table
+            .players
+            .iter()
+            .find(|p| p.stack < 100)
+            .expect("one player is now under the table minimum");
+
+        // A top-up that lands one chip short of the minimum is refused.
+        let needed = 100 - short.stack;
+        assert!(needed > 1, "the short stack has room to fall short");
+        s.token_admin_client.mint(&short.address, &needed);
+
+        let err = s
+            .client
+            .try_rebuy(&table_id, &short.address, &(needed - 1))
+            .expect_err("a top-up that stays under min_buy_in is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+
+        // Topping up exactly to the minimum works.
+        assert_eq!(s.client.rebuy(&table_id, &short.address, &needed), 100);
+    }
+
+    #[test]
+    fn test_rebuy_rejects_non_positive_amount() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 500);
+
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &0)
+            .expect_err("zero rebuy is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+    }
+
+    #[test]
+    fn test_rebuy_rejected_during_an_active_hand() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 200);
+
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+
+        s.token_admin_client.mint(&p1, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &p1, &100)
+            .expect_err("chips cannot enter mid-hand");
+        assert_eq!(err, Ok(PokerTableError::CannotRebuyDuringActiveHand));
+    }
+
+    #[test]
+    fn test_rebuy_allowed_in_settlement_between_hands() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 200);
+
+        play_fold_hand(&s, table_id);
+        assert_eq!(s.client.get_table(&table_id).phase, GamePhase::Settlement);
+
+        let stack_before = s
+            .client
+            .get_table(&table_id)
+            .players
+            .get(0)
+            .unwrap()
+            .stack;
+        let new_stack = rebuy(&s, table_id, &p1, 100);
+        assert_eq!(new_stack, stack_before + 100);
+    }
+
+    #[test]
+    fn test_rebuy_requires_a_seat() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let stranger = Address::generate(&s.env);
+        s.token_admin_client.mint(&stranger, &500);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &stranger, &500)
+            .expect_err("an unseated wallet cannot rebuy");
+        assert_eq!(err, Ok(PokerTableError::PlayerNotAtTable));
+    }
+
+    #[test]
+    fn test_rebuy_preserves_chip_conservation() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+        let contract_addr = s.client.address.clone();
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 300);
+        assert_eq!(s.token.balance(&contract_addr), 500);
+
+        rebuy(&s, table_id, &p1, 250);
+        assert_eq!(s.token.balance(&contract_addr), 750);
+
+        // Contract balance still equals stacks + pot + rake.
+        let table = s.client.get_table(&table_id);
+        let stacks: i128 = table.players.iter().map(|p| p.stack).sum();
+        assert_eq!(
+            s.token.balance(&contract_addr),
+            stacks + table.pot + table.rake_balance
+        );
+    }
+
+    #[test]
+    fn test_set_max_rebuys_updates_the_limit() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 1);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        rebuy(&s, table_id, &player, 100);
+
+        s.token_admin_client.mint(&player, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &100)
+            .expect_err("limit of 1 is used up");
+        assert_eq!(err, Ok(PokerTableError::RebuyLimitReached));
+
+        // Raising the limit lets the player continue.
+        s.client.set_max_rebuys(&table_id, &3);
+        assert_eq!(s.client.rebuy(&table_id, &player, &100), 400);
+        assert_eq!(s.client.get_table(&table_id).config.max_rebuys, 3);
+    }
+
+    #[test]
+    fn test_rebuy_counter_resets_after_rejoining() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 1);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+        rebuy(&s, table_id, &player, 100);
+        assert_eq!(s.client.get_player_buy_in(&table_id, &player).1, 1);
+
+        s.client.leave_table(&table_id, &player);
+        s.client.join_table(&table_id, &player, &300);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 300, "a fresh session starts a fresh buy-in total");
+        assert_eq!(count, 0);
     }
 
     #[test]
