@@ -69,6 +69,7 @@ mod session_migration;
 mod soroban;
 mod stats;
 mod tls_client;
+mod tournament;
 
 use api::admin::{AdminConfig, AdminState};
 
@@ -300,6 +301,8 @@ struct AppState {
     /// (the general transaction-submission identity) so rotating it can't
     /// disrupt in-flight gameplay transaction signing.
     committee_key_rotation: Arc<RwLock<key_rotation::KeyRotationState>>,
+    /// In-memory sit-and-go tournament state.
+    tournaments: tournament::TournamentStore,
 }
 
 #[derive(Clone)]
@@ -695,6 +698,7 @@ async fn main() {
         idempotency_store: idempotency::new_store(),
         benchmark_store,
         committee_key_rotation,
+        tournaments: tournament::new_store(),
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
     key_rotation::spawn_rotation_task(
@@ -905,6 +909,15 @@ async fn main() {
             get(api::admin_get_archive),
         )
         .route("/api/admin/archives/purge", post(api::admin_purge_archives))
+        // Tournament (sit-and-go) endpoints (Issue #17)
+        .route("/api/tournaments", get(api::tournament_api::list_tournaments))
+        .route("/api/tournaments", post(api::tournament_api::create_tournament))
+        .route("/api/tournaments/:id", get(api::tournament_api::get_tournament))
+        .route("/api/tournaments/:id/register", post(api::tournament_api::register_player))
+        .route("/api/tournaments/:id/start", post(api::tournament_api::start_tournament))
+        .route("/api/tournaments/:id/hand-result", post(api::tournament_api::record_hand_result))
+        .route("/api/tournaments/:id/balancing", get(api::tournament_api::get_balancing))
+        .route("/api/tournaments/:id/cancel", post(api::tournament_api::cancel_tournament))
         .layer(axum::middleware::from_fn_with_state(
             state.idempotency_store.clone(),
             idempotency::idempotency_middleware,
