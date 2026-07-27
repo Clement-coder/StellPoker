@@ -49,6 +49,21 @@ pub(crate) struct OnchainTableView {
     pub phase: String,
     pub max_players: u32,
     pub seats: Vec<(u32, String)>,
+    /// Chip stacks aligned with `seats` order (Issue #53).
+    pub stacks: Vec<i64>,
+}
+
+fn parse_i64_value(v: &Value) -> Option<i64> {
+    if let Some(n) = v.as_i64() {
+        return Some(n);
+    }
+    if let Some(n) = v.as_u64() {
+        return Some(n as i64);
+    }
+    if let Some(s) = v.as_str() {
+        return s.parse::<i64>().ok();
+    }
+    None
 }
 
 pub(crate) async fn fetch_onchain_table_view(
@@ -65,7 +80,7 @@ pub(crate) async fn fetch_onchain_table_view(
         .ok_or("missing phase")?
         .to_string();
 
-    let mut seats: Vec<(u32, String)> = value
+    let mut seat_rows: Vec<(u32, String, i64)> = value
         .get("players")
         .and_then(|v| v.as_array())
         .ok_or("missing players")?
@@ -76,10 +91,20 @@ pub(crate) async fn fetch_onchain_table_view(
                 .get("seat_index")
                 .and_then(parse_u32_value)
                 .unwrap_or(0);
-            Some((seat, address))
+            let stack = player
+                .get("stack")
+                .and_then(parse_i64_value)
+                .unwrap_or(0);
+            Some((seat, address, stack))
         })
         .collect();
-    seats.sort_by_key(|(seat, _)| *seat);
+    seat_rows.sort_by_key(|(seat, _, _)| *seat);
+
+    let seats: Vec<(u32, String)> = seat_rows
+        .iter()
+        .map(|(seat, addr, _)| (*seat, addr.clone()))
+        .collect();
+    let stacks: Vec<i64> = seat_rows.iter().map(|(_, _, s)| *s).collect();
 
     let max_players = value
         .get("config")
@@ -91,6 +116,7 @@ pub(crate) async fn fetch_onchain_table_view(
         phase,
         max_players,
         seats,
+        stacks,
     })
 }
 

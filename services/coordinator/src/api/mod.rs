@@ -278,6 +278,77 @@ pub async fn list_open_tables(
     Ok(Json(OpenTablesResponse { tables }))
 }
 
+/// GET /api/tables/overview
+///
+/// Multi-table overview for the mini-map (Issue #53): all known tables with
+/// seat counts and aggregate chip stacks.
+pub async fn list_table_overview(
+    State(state): State<AppState>,
+) -> Result<Json<crate::api::types::TableOverviewResponse>, StatusCode> {
+    use crate::api::types::{TableOverviewInfo, TableOverviewResponse};
+
+    if !state.soroban_config.is_configured() {
+        // Fall back to in-memory sessions when chain is not configured.
+        let tables_guard = state.tables.read().await;
+        let mut tables: Vec<TableOverviewInfo> = tables_guard
+            .keys()
+            .map(|table_id| TableOverviewInfo {
+                table_id: *table_id,
+                phase: "Unknown".to_string(),
+                max_players: 6,
+                seated: 0,
+                total_chips: 0,
+                stacks: Vec::new(),
+            })
+            .collect();
+        tables.sort_by_key(|t| t.table_id);
+        return Ok(Json(TableOverviewResponse { tables }));
+    }
+
+    let scan_max = std::env::var("OPEN_TABLE_SCAN_MAX")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(32);
+
+    // Also include live in-memory table ids beyond the scan window.
+    let session_ids: Vec<u32> = {
+        let guard = state.tables.read().await;
+        guard.keys().copied().collect()
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut tables = Vec::new();
+
+    let mut candidates: Vec<u32> = (0..scan_max).collect();
+    for id in session_ids {
+        if id >= scan_max {
+            candidates.push(id);
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+
+    for table_id in candidates {
+        if !seen.insert(table_id) {
+            continue;
+        }
+        let Ok(view) = fetch_onchain_table_view(&state.soroban_config, table_id).await else {
+            continue;
+        };
+        let total_chips: i64 = view.stacks.iter().sum();
+        tables.push(TableOverviewInfo {
+            table_id,
+            phase: view.phase,
+            max_players: view.max_players,
+            seated: view.seats.len(),
+            total_chips,
+            stacks: view.stacks,
+        });
+    }
+
+    Ok(Json(TableOverviewResponse { tables }))
+}
+
 /// POST /api/table/{table_id}/join
 ///
 /// Register wallet-to-seat mapping for a wallet that already joined on-chain.
@@ -1009,6 +1080,25 @@ pub async fn player_action(
     } else {
         Some(tx_hash)
     };
+
+    // Issue #55: track HUD stats (VPIP / PFR / AF) from live actions.
+    let is_preflop = {
+        let tables = state.tables.read().await;
+        tables
+            .get(&table_id)
+            .map(|s| {
+                let p = s.phase.to_ascii_lowercase();
+                p.contains("preflop") || p == "dealing" || p.is_empty()
+            })
+            .unwrap_or(true)
+    };
+    crate::stats::record_player_action(
+        &state.stats,
+        &player_address,
+        &normalized,
+        is_preflop,
+    )
+    .await;
 
     broadcast_table_state(&state, table_id).await;
 

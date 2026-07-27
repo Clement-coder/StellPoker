@@ -372,6 +372,43 @@ input[type="text"]:focus {
   visibility: visible;
 }
 
+/* Multi-line player HUD stats tooltip (Issue #55) */
+.stats-tooltip {
+  visibility: hidden;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #0c0a18;
+  color: #f5e6c8;
+  text-align: left;
+  padding: 8px 10px;
+  border: 2px solid #8b6914;
+  font-size: 7px;
+  white-space: nowrap;
+  z-index: 120;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  margin-bottom: 6px;
+  min-width: 88px;
+  line-height: 1.6;
+  font-family: "Press Start 2P", monospace;
+}
+.has-stats-tooltip:hover .stats-tooltip {
+  visibility: visible;
+}
+.stats-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stats-tooltip-label {
+  color: #95a5a6;
+}
+.stats-tooltip-value {
+  color: #f1c40f;
+}
+
 /* Emote bubble floating animation */
 @keyframes floatUp {
   0% { transform: translateY(0) scale(0.8); opacity: 0; }

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { getMasterVolume, setMasterVolume } from "./PixelWorld";
 import { clearSavedWallet } from "@/lib/freighter";
 import { ProofExplorer } from "./ProofExplorer";
+import { LanguageSelector } from "./LanguageSelector";
+import { useT } from "@/lib/i18n/context";
 
 type Tab = "settings" | "flappy" | "proofs";
 
@@ -269,6 +271,7 @@ export function GameBoyButton({ onClick }: { onClick: () => void }) {
 
 export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
   const router = useRouter();
+  const t = useT();
   const [tab, setTab] = useState<Tab>("settings");
   const [volume, setVolume] = useState(() => Math.round(getMasterVolume() * 100));
   const [flappy, setFlappy] = useState<FlappyState>(initFlappy);
@@ -538,6 +541,12 @@ export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
                 {/* Divider */}
                 <div style={{ borderTop: "1px dashed #6b7a60" }} />
 
+                {/* Language (Issue #60) */}
+                <LanguageSelector variant="settings" />
+
+                {/* Divider */}
+                <div style={{ borderTop: "1px dashed #6b7a60" }} />
+
                 {/* Logout */}
                 <button
                   onClick={handleLogout}
@@ -561,7 +570,7 @@ export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
                     e.currentTarget.style.color = "#b8c4a0";
                   }}
                 >
-                  LOGOUT
+                  {t("settings.logout")}
                 </button>
 
               </div>
