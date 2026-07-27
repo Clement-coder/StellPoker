@@ -2,6 +2,29 @@
 @import "tailwindcss";
 
 :root {
+ /* Light theme defaults */
+ --bg-top: var(--sky-top);
+ --bg-bottom: var(--sky-bottom);
+ --text-color: var(--pixel-cream);
+}
+
+:root[data-theme="dark"] {
+ --bg-top: #0a0a12;
+ --bg-bottom: #0d1220;
+ --text-color: #f5f5f5;
+ --pixel-cream: #f5f5f5;
+ --ui-border: #6b4f12;
+}
+
+:root[data-theme="light"] {
+ --bg-top: #87ceeb;
+ --bg-bottom: #cfefff;
+ --text-color: #222222;
+ --pixel-cream: #3d2400;
+ --ui-border: #8b6914;
+}
+
+:root {
   --sky-top: #4a90d9;
   --sky-bottom: #87ceeb;
   --grass-light: #5cb85c;
@@ -31,8 +54,8 @@
 }
 
 body {
-  background: var(--sky-top);
-  color: var(--pixel-cream);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  color: var(--text-color);
   font-family: 'Press Start 2P', monospace;
   overflow-x: hidden;
   min-height: 100vh;
