@@ -45,6 +45,7 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     // Transition to dealing phase (committee will shuffle + deal)
     table.phase = GamePhase::Dealing;
     table.last_action_ledger = env.ledger().sequence();
+    table.action_deadline = 0; // No action deadline during Dealing phase
     Ok(())
 }
 

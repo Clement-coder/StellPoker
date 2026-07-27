@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, TableSession};
+use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -35,6 +35,18 @@ use session::{
 
 const MAX_PLAYERS: usize = 6;
 const MIN_PLAYERS: usize = 2;
+
+/// Derive the parameterised circuit name for a given base circuit and player
+/// count.  Returns e.g. `"deal_valid_2p"` for 2 players, falling back to the
+/// unparameterised `"deal_valid"` when the count equals MAX_PLAYERS or the
+/// parameterised variant is not expected to exist.
+fn parameterised_circuit_name(base: &str, player_count: usize) -> String {
+    if player_count >= MIN_PLAYERS && player_count < MAX_PLAYERS {
+        format!("{}_{}p", base, player_count)
+    } else {
+        base.to_string()
+    }
+}
 
 pub struct SessionGuard {
     counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -212,6 +224,8 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        mpc_node_progress: Vec::new(),
+        mpc_operation_started: None,
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -409,6 +423,8 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            mpc_node_progress: Vec::new(),
+            mpc_operation_started: None,
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -434,12 +450,13 @@ pub async fn request_deal(
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_deal.share_set_ids,
         &proof_session_id,
-        &req.circuit_name,
+        &deal_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
@@ -780,12 +797,14 @@ pub async fn request_showdown(
 
     let proof_session_id = next_proof_session_id(session, "showdown");
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let showdown_circuit =
+        parameterised_circuit_name("showdown_valid", session.player_order.len());
     let showdown_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_showdown.share_set_ids,
         &proof_session_id,
-        "showdown_valid",
+        &showdown_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
@@ -1165,6 +1184,35 @@ pub async fn get_table_state(
         })?;
 
     Ok(Json(TableStateResponse { state: result }))
+}
+
+/// GET /api/table/{table_id}/mpc-status
+///
+/// Returns per-node MPC phase progress for the table's current operation.
+/// The frontend polls this during deal/reveal/showdown to show a live
+/// indicator of which nodes have responded.
+pub async fn get_mpc_status(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+) -> Result<Json<types::TableMpcStatusResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+
+    let tables = state.tables.read().await;
+    let session = tables.get(&table_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let active_sessions = state.mpc_sessions.read().await.len();
+
+    Ok(Json(types::TableMpcStatusResponse {
+        table_id,
+        phase: session.phase.clone(),
+        nodes: session.mpc_node_progress.clone(),
+        active_sessions,
+    }))
 }
 
 /// GET /api/committee/status

@@ -149,6 +149,7 @@ struct HealthResponse {
         api::player_action,
         api::get_player_cards,
         api::get_table_state,
+        api::get_mpc_status,
         api::committee_status,
         api::register_node,
         api::node_heartbeat,
@@ -207,6 +208,8 @@ struct HealthResponse {
         api::types::WalletChallengeResponse,
         api::types::WalletVerifyRequest,
         api::types::WalletVerifyResponse,
+        api::types::MpcNodeProgress,
+        api::types::TableMpcStatusResponse,
     )),
     tags(
         (name = "Health", description = "Health check and monitoring endpoints"),
@@ -348,6 +351,12 @@ struct TableSession {
     showdown_result: Option<(String, u32)>,
     /// Monotonic nonce for unique proof session IDs.
     proof_nonce: u64,
+    /// Per-node MPC phase progress for the current operation.
+    #[serde(default)]
+    mpc_node_progress: Vec<MpcNodeProgress>,
+    /// Timestamp when the current MPC operation started (epoch secs).
+    #[serde(default)]
+    mpc_operation_started: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -810,6 +819,7 @@ async fn main() {
             get(api::get_player_cards),
         )
         .route("/api/table/:table_id/state", get(api::get_table_state))
+        .route("/api/table/:table_id/mpc-status", get(api::get_mpc_status))
         .route("/api/committee/status", get(api::committee_status))
         .route("/api/table/:table_id/chat/ws", get(chat_ws_handler))
         .route(
