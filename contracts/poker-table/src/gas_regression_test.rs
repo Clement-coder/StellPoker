@@ -112,6 +112,7 @@ fn cfg(g: &G) -> TableConfig {
         verifier: g.verifier.clone(),
         game_hub,
         rake_bps: 0,
+        max_rebuys: 0,
     }
 }
 
@@ -146,7 +147,7 @@ fn mock_deal(g: &G, table_id: u32, n: u32) {
 fn measure<F: FnOnce()>(g: &G, f: F) -> u64 {
     g.env.cost_estimate().budget().reset_unlimited();
     f();
-    g.env.cost_estimate().budget().cpu_instruction_count()
+    g.env.cost_estimate().budget().cpu_instruction_cost()
 }
 
 fn check(label: &str, cost: u64, budget: u64) {
@@ -326,6 +327,7 @@ fn gas_withdraw_rake() {
         verifier: g.verifier.clone(),
         game_hub,
         rake_bps: 500,
+        max_rebuys: 0,
     };
     let table_id = g.client.create_table(&g.admin, &config);
     mint_and_join(&g, table_id, 5000);

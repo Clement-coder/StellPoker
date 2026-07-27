@@ -23,6 +23,7 @@ import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
+import { TableTabs } from "./TableTabs";
 import { ThemeSelector } from "./ThemeSelector";
 import { TableMiniMap } from "./TableMiniMap";
 import { LanguageSelector } from "./LanguageSelector";
@@ -776,6 +777,13 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
   return (
     <PixelWorld>
       <div className="min-h-screen flex flex-col items-center gap-4 p-4 pt-6 relative z-[10]">
+        {/* Switcher for a player sitting at several tables at once (#72) */}
+        <TableTabs
+          activeTableId={tableId}
+          activeMode={playMode}
+          address={userAddress ?? null}
+        />
+
         {/* Header bar */}
         <div className="w-full max-w-3xl flex items-center justify-between">
           <div className="flex items-center gap-3">

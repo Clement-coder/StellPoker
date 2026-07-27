@@ -83,6 +83,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "min_buy_in"
                       },
                       "val": {
@@ -314,6 +322,14 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "admin"
                     },
                     "val": {
@@ -380,6 +396,14 @@
                           },
                           "val": {
                             "u32": 6
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
                           }
                         },
                         {
@@ -471,6 +495,14 @@
                     },
                     "val": {
                       "bytes": "0000000000000000000000000000000000000000000000000000000000000000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": []
                     }
                   },
                   {

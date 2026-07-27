@@ -83,6 +83,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "min_buy_in"
                       },
                       "val": {
@@ -540,6 +548,99 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVAX5"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "Table"
                   },
                   {
@@ -550,6 +651,14 @@
               "durability": "persistent",
               "val": {
                 "map": [
+                  {
+                    "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
                   {
                     "key": {
                       "symbol": "admin"
@@ -618,6 +727,14 @@
                           },
                           "val": {
                             "u32": 6
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
                           }
                         },
                         {
@@ -732,6 +849,103 @@
                   },
                   {
                     "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "10"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Call"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 1
+                              }
+                            }
+                          ]
+                        },
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "5"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Call"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 2
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "hand_commitments"
                     },
                     "val": {
@@ -834,6 +1048,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -854,6 +1076,14 @@
                               },
                               "val": {
                                 "i128": "490"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "500"
                               }
                             }
                           ]
@@ -902,6 +1132,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -922,6 +1160,14 @@
                               },
                               "val": {
                                 "i128": "490"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "500"
                               }
                             }
                           ]
@@ -970,6 +1216,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -990,6 +1244,14 @@
                               },
                               "val": {
                                 "i128": "490"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "500"
                               }
                             }
                           ]

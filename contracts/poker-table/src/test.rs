@@ -71,6 +71,7 @@ mod test {
             verifier: verifier.clone(),
             game_hub,
             rake_bps: 0,
+            max_rebuys: 0,
         }
     }
 
@@ -139,6 +140,7 @@ mod test {
             verifier: verifier.clone(),
             game_hub,
             rake_bps,
+            max_rebuys: 0,
         }
     }
 
@@ -1151,5 +1153,576 @@ mod test {
         let player = Address::generate(&s.env);
         let seat = join_player(&s, table_id, &player, 500);
         assert_eq!(seat, 0);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Hand history (#71)
+    // ---------------------------------------------------------------------------
+
+    /// Play one heads-up hand that ends with a fold, leaving the table in
+    /// Settlement and one hand in the history buffer.
+    fn play_fold_hand(s: &TestSetup, table_id: u32) {
+        s.client.start_hand(&table_id);
+        let n = s.client.get_table(&table_id).players.len();
+        commit_mock_deal(s, table_id, n);
+
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+    }
+
+    #[test]
+    fn test_hand_history_records_settled_hand() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        assert_eq!(s.client.get_hand_history(&table_id, &0).len(), 0);
+
+        play_fold_hand(&s, table_id);
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), 1);
+
+        let record = history.get(0).unwrap();
+        assert_eq!(record.hand_number, 1);
+        assert_eq!(record.players.len(), 2);
+        assert!(!record.showdown, "fold win is not a showdown");
+        assert_eq!(record.total_pot, 15); // sb 5 + bb 10
+        assert_eq!(record.rake, 0);
+
+        // The whole pot goes to the one seat still standing.
+        assert_eq!(record.payouts.len(), 1);
+        let payout = record.payouts.get(0).unwrap();
+        assert_eq!(payout.amount, 15);
+
+        // The fold that ended the hand is in the action summary.
+        assert_eq!(record.actions.len(), 1);
+        let action = record.actions.get(0).unwrap();
+        assert_eq!(action.kind, ActionKind::Fold);
+        assert_eq!(action.amount, 0);
+        assert_eq!(action.phase, GamePhase::Preflop);
+    }
+
+    #[test]
+    fn test_hand_history_is_newest_first_and_queryable_by_number() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        for _ in 0..3 {
+            play_fold_hand(&s, table_id);
+        }
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), 3);
+        assert_eq!(history.get(0).unwrap().hand_number, 3);
+        assert_eq!(history.get(1).unwrap().hand_number, 2);
+        assert_eq!(history.get(2).unwrap().hand_number, 1);
+
+        // A limit pages in only the latest entries.
+        let latest = s.client.get_hand_history(&table_id, &2);
+        assert_eq!(latest.len(), 2);
+        assert_eq!(latest.get(0).unwrap().hand_number, 3);
+
+        // Direct lookup by hand number.
+        let hand2 = s.client.get_hand(&table_id, &2).unwrap();
+        assert_eq!(hand2.hand_number, 2);
+        assert!(s.client.get_hand(&table_id, &99).is_none());
+
+        let meta = s.client.get_hand_history_meta(&table_id);
+        assert_eq!(meta.stored, 3);
+        assert_eq!(meta.total_archived, 3);
+    }
+
+    #[test]
+    fn test_hand_history_buffer_evicts_oldest() {
+        let s = setup();
+        let table_id = create_default_table(&s);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 500);
+        join_player(&s, table_id, &p2, 500);
+
+        let capacity = s.client.hand_history_capacity();
+        for _ in 0..(capacity + 2) {
+            play_fold_hand(&s, table_id);
+        }
+
+        let meta = s.client.get_hand_history_meta(&table_id);
+        assert_eq!(meta.stored, capacity, "buffer never grows past capacity");
+        assert_eq!(meta.total_archived, capacity + 2);
+
+        let history = s.client.get_hand_history(&table_id, &0);
+        assert_eq!(history.len(), capacity);
+        assert_eq!(history.get(0).unwrap().hand_number, capacity + 2);
+
+        // The two oldest hands have been overwritten.
+        assert!(s.client.get_hand(&table_id, &1).is_none());
+        assert!(s.client.get_hand(&table_id, &2).is_none());
+        assert!(s.client.get_hand(&table_id, &3).is_some());
+    }
+
+    #[test]
+    fn test_hand_history_records_bets_and_rake() {
+        let s = setup();
+        let config = rake_config(&s.env, &s.token.address, &s.committee, &s.verifier, 500); // 5%
+        let table_id = s.client.create_table(&s.admin, &config);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 5000);
+        join_player(&s, table_id, &p2, 5000);
+
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+
+        // The small blind raises (a call would end the round outright heads-up),
+        // then the big blind folds and the hand settles.
+        let table = s.client.get_table(&table_id);
+        let raiser = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &raiser.address, &Action::Raise(200));
+
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+
+        let record = s.client.get_hand(&table_id, &1).unwrap();
+        assert_eq!(record.actions.len(), 2);
+
+        let raise = record.actions.get(0).unwrap();
+        assert_eq!(raise.kind, ActionKind::Raise);
+        // 100 to call the big blind plus the 200 raise on top.
+        assert_eq!(raise.amount, 300);
+
+        let fold = record.actions.get(1).unwrap();
+        assert_eq!(fold.kind, ActionKind::Fold);
+        assert_eq!(fold.amount, 0);
+
+        // Pot is 600 (SB 100 + BB 200 + the 300 raise); rake is 5%.
+        assert_eq!(record.total_pot, 600);
+        assert_eq!(record.rake, 30);
+        assert_eq!(record.payouts.get(0).unwrap().amount, 570);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Partial buy-ins and rebuys (#75)
+    // ---------------------------------------------------------------------------
+
+    /// A table with `max_rebuys` configured. Buy-in band is the default
+    /// 100..=1000, so a rebuy has plenty of room between the two bounds.
+    fn rebuy_table(s: &TestSetup, max_rebuys: u32) -> u32 {
+        let mut config = default_config(&s.env, &s.token.address, &s.committee, &s.verifier);
+        config.max_rebuys = max_rebuys;
+        s.client.create_table(&s.admin, &config)
+    }
+
+    /// Mint `amount` to `player` and rebuy for it.
+    fn rebuy(s: &TestSetup, table_id: u32, player: &Address, amount: i128) -> i128 {
+        s.token_admin_client.mint(player, &amount);
+        s.client.rebuy(&table_id, player, &amount)
+    }
+
+    #[test]
+    fn test_rebuy_tops_up_a_partial_amount() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        // A partial top-up well under a full buy-in.
+        let new_stack = rebuy(&s, table_id, &player, 150);
+        assert_eq!(new_stack, 350);
+
+        let table = s.client.get_table(&table_id);
+        let p = table.players.get(0).unwrap();
+        assert_eq!(p.stack, 350);
+        assert_eq!(p.total_buy_in, 350);
+        assert_eq!(p.rebuy_count, 1);
+
+        // The chips actually moved into the contract.
+        assert_eq!(s.token.balance(&player), 0);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 350);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_rebuy_allows_repeated_partial_top_ups() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 100);
+
+        assert_eq!(rebuy(&s, table_id, &player, 50), 150);
+        assert_eq!(rebuy(&s, table_id, &player, 50), 200);
+        assert_eq!(rebuy(&s, table_id, &player, 800), 1000);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 1000);
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_rebuy_respects_the_per_session_limit() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 2);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        rebuy(&s, table_id, &player, 100);
+        rebuy(&s, table_id, &player, 100);
+
+        s.token_admin_client.mint(&player, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &100)
+            .expect_err("third rebuy is over the limit");
+        assert_eq!(err, Ok(PokerTableError::RebuyLimitReached));
+    }
+
+    #[test]
+    fn test_rebuy_cannot_exceed_max_buy_in() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 900);
+
+        // 900 + 200 would put the stack over the 1000 maximum.
+        s.token_admin_client.mint(&player, &200);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &200)
+            .expect_err("rebuy past max_buy_in is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+
+        // Exactly reaching the maximum is fine.
+        assert_eq!(s.client.rebuy(&table_id, &player, &100), 1000);
+    }
+
+    #[test]
+    fn test_rebuy_must_reach_min_buy_in() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 100);
+        let other = Address::generate(&s.env);
+        join_player(&s, table_id, &other, 500);
+
+        // Lose the stack down to a stub, then try to top up below the minimum.
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+        let table = s.client.get_table(&table_id);
+        let folder = table.players.get(table.current_turn).unwrap();
+        s.client
+            .player_action(&table_id, &folder.address, &Action::Fold);
+
+        let table = s.client.get_table(&table_id);
+        let short = table
+            .players
+            .iter()
+            .find(|p| p.stack < 100)
+            .expect("one player is now under the table minimum");
+
+        // A top-up that lands one chip short of the minimum is refused.
+        let needed = 100 - short.stack;
+        assert!(needed > 1, "the short stack has room to fall short");
+        s.token_admin_client.mint(&short.address, &needed);
+
+        let err = s
+            .client
+            .try_rebuy(&table_id, &short.address, &(needed - 1))
+            .expect_err("a top-up that stays under min_buy_in is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+
+        // Topping up exactly to the minimum works.
+        assert_eq!(s.client.rebuy(&table_id, &short.address, &needed), 100);
+    }
+
+    #[test]
+    fn test_rebuy_rejects_non_positive_amount() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 500);
+
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &0)
+            .expect_err("zero rebuy is rejected");
+        assert_eq!(err, Ok(PokerTableError::InvalidRebuyAmount));
+    }
+
+    #[test]
+    fn test_rebuy_rejected_during_an_active_hand() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 200);
+
+        s.client.start_hand(&table_id);
+        commit_mock_deal(&s, table_id, 2);
+
+        s.token_admin_client.mint(&p1, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &p1, &100)
+            .expect_err("chips cannot enter mid-hand");
+        assert_eq!(err, Ok(PokerTableError::CannotRebuyDuringActiveHand));
+    }
+
+    #[test]
+    fn test_rebuy_allowed_in_settlement_between_hands() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 200);
+
+        play_fold_hand(&s, table_id);
+        assert_eq!(s.client.get_table(&table_id).phase, GamePhase::Settlement);
+
+        let stack_before = s
+            .client
+            .get_table(&table_id)
+            .players
+            .get(0)
+            .unwrap()
+            .stack;
+        let new_stack = rebuy(&s, table_id, &p1, 100);
+        assert_eq!(new_stack, stack_before + 100);
+    }
+
+    #[test]
+    fn test_rebuy_requires_a_seat() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+
+        let stranger = Address::generate(&s.env);
+        s.token_admin_client.mint(&stranger, &500);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &stranger, &500)
+            .expect_err("an unseated wallet cannot rebuy");
+        assert_eq!(err, Ok(PokerTableError::PlayerNotAtTable));
+    }
+
+    #[test]
+    fn test_rebuy_preserves_chip_conservation() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 0);
+        let contract_addr = s.client.address.clone();
+
+        let p1 = Address::generate(&s.env);
+        let p2 = Address::generate(&s.env);
+        join_player(&s, table_id, &p1, 200);
+        join_player(&s, table_id, &p2, 300);
+        assert_eq!(s.token.balance(&contract_addr), 500);
+
+        rebuy(&s, table_id, &p1, 250);
+        assert_eq!(s.token.balance(&contract_addr), 750);
+
+        // Contract balance still equals stacks + pot + rake.
+        let table = s.client.get_table(&table_id);
+        let stacks: i128 = table.players.iter().map(|p| p.stack).sum();
+        assert_eq!(
+            s.token.balance(&contract_addr),
+            stacks + table.pot + table.rake_balance
+        );
+    }
+
+    #[test]
+    fn test_set_max_rebuys_updates_the_limit() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 1);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+
+        rebuy(&s, table_id, &player, 100);
+
+        s.token_admin_client.mint(&player, &100);
+        let err = s
+            .client
+            .try_rebuy(&table_id, &player, &100)
+            .expect_err("limit of 1 is used up");
+        assert_eq!(err, Ok(PokerTableError::RebuyLimitReached));
+
+        // Raising the limit lets the player continue.
+        s.client.set_max_rebuys(&table_id, &3);
+        assert_eq!(s.client.rebuy(&table_id, &player, &100), 400);
+        assert_eq!(s.client.get_table(&table_id).config.max_rebuys, 3);
+    }
+
+    #[test]
+    fn test_rebuy_counter_resets_after_rejoining() {
+        let s = setup();
+        let table_id = rebuy_table(&s, 1);
+
+        let player = Address::generate(&s.env);
+        join_player(&s, table_id, &player, 200);
+        rebuy(&s, table_id, &player, 100);
+        assert_eq!(s.client.get_player_buy_in(&table_id, &player).1, 1);
+
+        s.client.leave_table(&table_id, &player);
+        s.client.join_table(&table_id, &player, &300);
+
+        let (total, count) = s.client.get_player_buy_in(&table_id, &player);
+        assert_eq!(total, 300, "a fresh session starts a fresh buy-in total");
+        assert_eq!(count, 0);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Multiple simultaneous tables per player (#72)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_one_wallet_can_sit_at_many_tables_at_once() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        // Enough tables to make clear there is no small cap hiding anywhere.
+        let mut table_ids: Vec<u32> = Vec::new(&s.env);
+        for _ in 0..8u32 {
+            let table_id = create_default_table(&s);
+            join_player(&s, table_id, &player, 300);
+            table_ids.push_back(table_id);
+        }
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 8);
+        assert_eq!(s.client.get_player_table_count(&player), 8);
+        for i in 0..table_ids.len() {
+            let table_id = table_ids.get(i).unwrap();
+            assert_eq!(seated.get(i).unwrap(), table_id);
+            let table = s.client.get_table(&table_id);
+            assert_eq!(table.players.get(0).unwrap().address, player);
+        }
+    }
+
+    #[test]
+    fn test_player_table_index_is_empty_by_default() {
+        let s = setup();
+        let stranger = Address::generate(&s.env);
+        assert_eq!(s.client.get_player_tables(&stranger).len(), 0);
+        assert_eq!(s.client.get_player_table_count(&stranger), 0);
+    }
+
+    #[test]
+    fn test_leaving_one_table_keeps_the_others() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let a = create_default_table(&s);
+        let b = create_default_table(&s);
+        let c = create_default_table(&s);
+        for table_id in [a, b, c] {
+            join_player(&s, table_id, &player, 300);
+        }
+
+        s.client.leave_table(&b, &player);
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 2);
+        assert_eq!(seated.get(0).unwrap(), a);
+        assert_eq!(seated.get(1).unwrap(), c);
+    }
+
+    #[test]
+    fn test_leaving_the_last_table_clears_the_index() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let table_id = create_default_table(&s);
+        join_player(&s, table_id, &player, 300);
+        s.client.leave_table(&table_id, &player);
+
+        assert_eq!(s.client.get_player_tables(&player).len(), 0);
+    }
+
+    #[test]
+    fn test_tables_stay_independent_across_concurrent_seats() {
+        let s = setup();
+        let hero = Address::generate(&s.env);
+        let villain_a = Address::generate(&s.env);
+        let villain_b = Address::generate(&s.env);
+
+        let a = create_default_table(&s);
+        let b = create_default_table(&s);
+        join_player(&s, a, &hero, 400);
+        join_player(&s, a, &villain_a, 400);
+        join_player(&s, b, &hero, 400);
+        join_player(&s, b, &villain_b, 400);
+
+        // A hand on table A leaves table B untouched.
+        play_fold_hand(&s, a);
+
+        assert_eq!(s.client.get_table(&a).phase, GamePhase::Settlement);
+        assert_eq!(s.client.get_table(&b).phase, GamePhase::Waiting);
+        assert_eq!(s.client.get_hand_history(&a, &0).len(), 1);
+        assert_eq!(s.client.get_hand_history(&b, &0).len(), 0);
+
+        // Hero is still seated at both.
+        assert_eq!(s.client.get_player_tables(&hero).len(), 2);
+    }
+
+    #[test]
+    fn test_rejoining_does_not_duplicate_the_index_entry() {
+        let s = setup();
+        let player = Address::generate(&s.env);
+
+        let table_id = create_default_table(&s);
+        join_player(&s, table_id, &player, 300);
+        s.client.leave_table(&table_id, &player);
+        join_player(&s, table_id, &player, 300);
+
+        let seated = s.client.get_player_tables(&player);
+        assert_eq!(seated.len(), 1);
+        assert_eq!(seated.get(0).unwrap(), table_id);
+    }
+
+    #[test]
+    fn test_hand_history_is_per_table() {
+        let s = setup();
+        let table_a = create_default_table(&s);
+        let table_b = create_default_table(&s);
+
+        for table_id in [table_a, table_b] {
+            let p1 = Address::generate(&s.env);
+            let p2 = Address::generate(&s.env);
+            join_player(&s, table_id, &p1, 500);
+            join_player(&s, table_id, &p2, 500);
+        }
+
+        play_fold_hand(&s, table_a);
+        play_fold_hand(&s, table_a);
+        play_fold_hand(&s, table_b);
+
+        assert_eq!(s.client.get_hand_history(&table_a, &0).len(), 2);
+        assert_eq!(s.client.get_hand_history(&table_b, &0).len(), 1);
     }
 }

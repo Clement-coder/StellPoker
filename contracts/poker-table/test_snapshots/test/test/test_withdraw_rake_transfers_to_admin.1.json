@@ -83,6 +83,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "min_buy_in"
                       },
                       "val": {
@@ -475,6 +483,304 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "HandHistoryMeta"
+                  },
+                  {
+                    "u32": 0
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "next_slot"
+                    },
+                    "val": {
+                      "u32": 1
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "stored"
+                    },
+                    "val": {
+                      "u32": 1
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "total_archived"
+                    },
+                    "val": {
+                      "u32": 1
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "HandRecord"
+                  },
+                  {
+                    "u32": 0
+                  },
+                  {
+                    "u32": 0
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "actions"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Fold"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "board"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "hand_number"
+                    },
+                    "val": {
+                      "u32": 1
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "payouts"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "address"
+                              },
+                              "val": {
+                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "285"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 1
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "players"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                        },
+                        {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "rake"
+                    },
+                    "val": {
+                      "i128": "15"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "settled_ledger"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "showdown"
+                    },
+                    "val": {
+                      "bool": false
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "total_pot"
+                    },
+                    "val": {
+                      "i128": "300"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "Table"
                   },
                   {
@@ -485,6 +791,14 @@
               "durability": "persistent",
               "val": {
                 "map": [
+                  {
+                    "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 100
+                    }
+                  },
                   {
                     "key": {
                       "symbol": "admin"
@@ -553,6 +867,14 @@
                           },
                           "val": {
                             "u32": 6
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
                           }
                         },
                         {
@@ -661,6 +983,59 @@
                   },
                   {
                     "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": [
+                        {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "amount"
+                              },
+                              "val": {
+                                "i128": "0"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "kind"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Fold"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "phase"
+                              },
+                              "val": {
+                                "vec": [
+                                  {
+                                    "symbol": "Preflop"
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "seat"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "hand_commitments"
                     },
                     "val": {
@@ -760,6 +1135,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -780,6 +1163,14 @@
                               },
                               "val": {
                                 "i128": "4900"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "5000"
                               }
                             }
                           ]
@@ -828,6 +1219,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -848,6 +1247,14 @@
                               },
                               "val": {
                                 "i128": "5085"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
+                              },
+                              "val": {
+                                "i128": "5000"
                               }
                             }
                           ]

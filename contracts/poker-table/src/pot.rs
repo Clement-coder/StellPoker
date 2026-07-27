@@ -411,6 +411,8 @@ mod pot_test {
             all_in,
             sitting_out: false,
             seat_index: seat,
+            total_buy_in: 0,
+            rebuy_count: 0,
         }
     }
 
@@ -437,6 +439,7 @@ mod pot_test {
                 verifier: admin.clone(),
                 game_hub: admin.clone(),
                 rake_bps: 0,
+                max_rebuys: 0,
             },
             phase: GamePhase::Showdown,
             players,
@@ -453,6 +456,8 @@ mod pot_test {
             committee: admin,
             session_id: 0,
             rake_balance: 0,
+            action_deadline: 0,
+            hand_actions: Vec::new(env),
         }
     }
 
