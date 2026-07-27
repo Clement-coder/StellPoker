@@ -67,6 +67,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -79,6 +87,30 @@
                       },
                       "val": {
                         "u32": 2
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -367,6 +399,68 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PlayerTables"
+                  },
+                  {
+                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "vec": [
+                  {
+                    "u32": 0
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 518400
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
                     "symbol": "Table"
                   },
                   {
@@ -377,6 +471,14 @@
               "durability": "persistent",
               "val": {
                 "map": [
+                  {
+                    "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
                   {
                     "key": {
                       "symbol": "admin"
@@ -433,6 +535,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -445,6 +555,30 @@
                           },
                           "val": {
                             "u32": 2
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -540,6 +674,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "hand_commitments"
                     },
                     "val": {
@@ -560,6 +702,14 @@
                     },
                     "val": {
                       "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {
@@ -632,6 +782,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -649,6 +807,14 @@
                             {
                               "key": {
                                 "symbol": "stack"
+                              },
+                              "val": {
+                                "i128": "500"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
                               },
                               "val": {
                                 "i128": "500"
@@ -700,6 +866,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "rebuy_count"
+                              },
+                              "val": {
+                                "u32": 0
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "seat_index"
                               },
                               "val": {
@@ -717,6 +891,14 @@
                             {
                               "key": {
                                 "symbol": "stack"
+                              },
+                              "val": {
+                                "i128": "500"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "total_buy_in"
                               },
                               "val": {
                                 "i128": "500"

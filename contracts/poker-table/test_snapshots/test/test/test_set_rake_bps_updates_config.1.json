@@ -67,6 +67,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "jackpot_rake_share_bps"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "max_buy_in"
                       },
                       "val": {
@@ -79,6 +87,30 @@
                       },
                       "val": {
                         "u32": 6
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "max_rebuys"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_category"
+                      },
+                      "val": {
+                        "u32": 7
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "min_bad_beat_rank"
+                      },
+                      "val": {
+                        "u32": 12
                       }
                     },
                     {
@@ -243,6 +275,14 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "action_deadline"
+                    },
+                    "val": {
+                      "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "admin"
                     },
                     "val": {
@@ -297,6 +337,14 @@
                         },
                         {
                           "key": {
+                            "symbol": "jackpot_rake_share_bps"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "max_buy_in"
                           },
                           "val": {
@@ -309,6 +357,30 @@
                           },
                           "val": {
                             "u32": 6
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "max_rebuys"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_category"
+                          },
+                          "val": {
+                            "u32": 7
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "min_bad_beat_rank"
+                          },
+                          "val": {
+                            "u32": 12
                           }
                         },
                         {
@@ -404,6 +476,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "hand_actions"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "hand_commitments"
                     },
                     "val": {
@@ -424,6 +504,14 @@
                     },
                     "val": {
                       "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "jackpot_balance"
+                    },
+                    "val": {
+                      "i128": "0"
                     }
                   },
                   {

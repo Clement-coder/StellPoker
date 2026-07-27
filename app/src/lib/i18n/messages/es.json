@@ -1,0 +1,123 @@
+{
+  "app": {
+    "title": "Póker en Stellar",
+    "back": "← Volver",
+    "loading": "Cargando…"
+  },
+  "nav": {
+    "history": "HISTORIAL",
+    "keys": "TECLAS [?]",
+    "chat": "CHAT",
+    "tables": "MESAS",
+    "stats": "STATS",
+    "language": "IDIOMA"
+  },
+  "table": {
+    "title": "MESA #{id}",
+    "hand": "MANO #{n}",
+    "waitingToJoin": "ESPERANDO UNIRSE...",
+    "connectWallet": "CONECTAR BILLETERA",
+    "emptySeat": "ASIENTO VACÍO",
+    "mpcStatus": "MPC: 3/3 NODOS | TACEO CO-NOIR REP3",
+    "viewTx": "VER TX ↗",
+    "explorer": "EXPLORADOR ↗",
+    "joinTable": "UNIRSE A LA MESA"
+  },
+  "seat": {
+    "you": "— TÚ —",
+    "aiBot": "— BOT IA —",
+    "yourTurn": "▼ TU TURNO ▼",
+    "theirTurn": "▼ SU TURNO ▼",
+    "winner": "★ GANADOR ★",
+    "chips": "FICHAS",
+    "bet": "APUESTA",
+    "folded": "RETIRADO",
+    "allIn": "¡ALL IN!",
+    "editAlias": "Cambiar tu alias",
+    "edit": "[EDITAR]",
+    "dealer": "[D]"
+  },
+  "stats": {
+    "title": "Estadísticas on-chain",
+    "global": "Global",
+    "handsPlayed": "Manos jugadas",
+    "biggestPot": "Bote más grande",
+    "playersJoined": "Jugadores unidos",
+    "leaderboard": "Clasificación",
+    "ratingLeaderboard": "Ratings ELO",
+    "noHands": "Aún no se han jugado manos.",
+    "player": "Jugador",
+    "handsWon": "Manos ganadas",
+    "rating": "Rating",
+    "rank": "Puesto",
+    "cachedAt": "En caché a las {time} · se actualiza cada 30s",
+    "vpip": "VPIP",
+    "pfr": "PFR",
+    "aggression": "AF",
+    "hands": "Manos",
+    "loadingStats": "Cargando estadísticas…",
+    "minHandsNote": "La clasificación requiere un mínimo de manos jugadas on-chain."
+  },
+  "minimap": {
+    "title": "VISTA DE MESAS",
+    "collapse": "OCULTAR",
+    "expand": "MAPA",
+    "seats": "{seated}/{max} asientos",
+    "chips": "{chips} fichas",
+    "phase": "Fase: {phase}",
+    "current": "ESTÁS AQUÍ",
+    "empty": "No se encontraron mesas",
+    "refresh": "ACTUALIZAR"
+  },
+  "home": {
+    "connect": "CONECTAR BILLETERA",
+    "createTable": "CREAR MESA",
+    "joinOpen": "UNIRSE A MESA ABIERTA",
+    "playSolo": "SOLO VS IA",
+    "viewStats": "VER STATS"
+  },
+  "actions": {
+    "fold": "RETIRARSE",
+    "check": "PASAR",
+    "call": "IGUALAR",
+    "bet": "APOSTAR",
+    "raise": "SUBIR",
+    "allIn": "ALL-IN",
+    "deal": "REPARTIR"
+  },
+  "settings": {
+    "volume": "VOLUMEN",
+    "language": "IDIOMA",
+    "english": "English",
+    "spanish": "Español",
+    "logout": "CERRAR SESIÓN",
+    "autoDetect": "Auto (navegador)"
+  },
+  "dealer": {
+    "shuffling": "BARAJANDO Y GENERANDO PRUEBA DE REPARTO... (~30-60s){timer}",
+    "revealProof": "GENERANDO PRUEBA DE REVELACIÓN... (~20-40s){timer}",
+    "showdown": "VERIFICANDO SHOWDOWN — ESTO TARDA 2-4 MINUTOS. ESPERA.{timer}",
+    "oneMoment": "Un momento...{timer}",
+    "dealingFlop": "Ronda de apuestas completa. El crupier revela el flop...",
+    "dealingTurn": "Ronda de apuestas completa. El crupier revela el turn...",
+    "dealingRiver": "Ronda de apuestas completa. El crupier revela el river...",
+    "resolvingShowdown": "Apuestas completas. El crupier resuelve el showdown...",
+    "joinPrompt": "Los asientos on-chain son {seats}. Pulsa UNIRSE A LA MESA con esta billetera.",
+    "soloStart": "Solo vs IA usa fichas ficticias (100 c/u). Pulsa REPARTIR para empezar.",
+    "headsUpWait": "El modo heads-up necesita 2 billeteras. Comparte el ID de mesa y espera.",
+    "headsUpReady": "Heads-up listo. Pulsa REPARTIR.",
+    "multiWait": "El modo 3-6 jugadores necesita al menos 3 billeteras unidas.",
+    "multiReady": "Mesa multi-jugador lista. Pulsa REPARTIR.",
+    "dealing": "Se están repartiendo las cartas.",
+    "preflop": "Preflop en vivo. Apuesta; el crupier revela la siguiente calle.",
+    "flop": "Flop en mesa. Apuesta; el crupier revela el turn.",
+    "turn": "Turn en mesa. Apuesta; el crupier revela el river.",
+    "river": "River en mesa. Última ronda; el crupier ejecuta el showdown.",
+    "showdownLive": "Showdown en curso.",
+    "youWin": "Mano completa. ¡GANASTE!",
+    "aiWins": "Mano completa. ¡GANA LA IA!",
+    "winner": "Mano completa. Ganador: {addr}.",
+    "handComplete": "Mano completa. Inicia la siguiente cuando quieras.",
+    "ready": "Listo cuando tú lo estés."
+  }
+}

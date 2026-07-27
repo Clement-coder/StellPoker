@@ -19,6 +19,21 @@ pub struct TableConfig {
     /// Rake taken from every pot, in basis points (100 = 1%). Capped at
     /// `MAX_RAKE_BPS` (500 = 5%); enforced on table creation.
     pub rake_bps: u32,
+    /// How many times a seated player may top their stack up during one
+    /// session at this table. `0` means unlimited. The counter resets when a
+    /// player leaves and rejoins.
+    pub max_rebuys: u32,
+    /// Share of the total rake (in basis points) that is diverted into the
+    /// bad-beat jackpot pool instead of going to the house. `0` disables the
+    /// jackpot entirely.
+    pub jackpot_rake_share_bps: u32,
+    /// Minimum hand category required for a bad-beat qualifying hand
+    /// (e.g. `7` = FourOfAKind).  Used alongside `min_bad_beat_rank` to
+    /// compute the qualifying score threshold.
+    pub min_bad_beat_category: u32,
+    /// Minimum rank of the quad / trips / card required within the
+    /// qualifying category (e.g. `12` = Ace).
+    pub min_bad_beat_rank: u32,
 }
 
 #[contracterror]
@@ -66,6 +81,11 @@ pub enum PokerTableError {
     ContractPaused = 39,
     ForceFoldNotAvailable = 40,
     TargetNotActive = 41,
+    CannotRebuyDuringActiveHand = 42,
+    RebuyLimitReached = 43,
+    InvalidRebuyAmount = 44,
+    JackpotNotConfigured = 45,
+    BadBeatHandDataInvalid = 46,
 }
 
 #[contracttype]
@@ -82,6 +102,12 @@ pub struct PlayerState {
     pub all_in: bool,
     pub sitting_out: bool,
     pub seat_index: u32,
+    /// Every chip this player has deposited at the table this session — the
+    /// initial buy-in plus every rebuy. Used to compute session profit and to
+    /// audit chip conservation independently of the current stack.
+    pub total_buy_in: i128,
+    /// Rebuys used this session, checked against `TableConfig::max_rebuys`.
+    pub rebuy_count: u32,
 }
 
 #[contracttype]
@@ -119,6 +145,76 @@ pub struct SidePot {
     pub eligible_players: Vec<u32>, // seat indices
 }
 
+/// The kind of a betting action, without its amount. Stored in hand history
+/// where the chips moved are recorded separately in `ActionRecord::amount`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionKind {
+    Fold,
+    Check,
+    Call,
+    Bet,
+    Raise,
+    AllIn,
+}
+
+/// One entry of a hand's action summary.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ActionRecord {
+    pub seat: u32,
+    /// Betting round the action was taken in.
+    pub phase: GamePhase,
+    pub kind: ActionKind,
+    /// Chips this action added to the pot (0 for fold/check).
+    pub amount: i128,
+}
+
+/// Chips credited to a single seat when a hand settled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Payout {
+    pub seat: u32,
+    pub address: Address,
+    pub amount: i128,
+}
+
+/// An immutable record of one completed hand, retained in the table's circular
+/// hand-history buffer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HandRecord {
+    pub hand_number: u32,
+    /// Seat-ordered addresses of the players dealt into the hand.
+    pub players: Vec<Address>,
+    /// Community cards as they stood when the hand ended (may be shorter than
+    /// five if everyone folded before the river).
+    pub board: Vec<u32>,
+    /// Betting actions in the order they were taken, truncated at
+    /// `history::MAX_ACTIONS_PER_HAND`.
+    pub actions: Vec<ActionRecord>,
+    /// How the pot was split, one entry per paid seat.
+    pub payouts: Vec<Payout>,
+    /// Pot size before rake was deducted.
+    pub total_pot: i128,
+    pub rake: i128,
+    /// True when the hand ended by showdown, false when everyone else folded.
+    pub showdown: bool,
+    pub settled_ledger: u32,
+}
+
+/// Bookkeeping for a table's circular hand-history buffer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HandHistoryMeta {
+    /// Slot the next archived hand will be written to.
+    pub next_slot: u32,
+    /// Records currently stored, saturating at the buffer capacity.
+    pub stored: u32,
+    /// Hands archived over the table's lifetime, including evicted ones.
+    pub total_archived: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct TableState {
@@ -141,9 +237,15 @@ pub struct TableState {
     pub session_id: u32, // Game hub session ID for current hand
     /// Accumulated rake collected from settled hands, withdrawable by `admin`.
     pub rake_balance: i128,
+    /// Accumulated bad-beat jackpot pool, fed by a share of each hand's rake.
+    /// Paid out when a qualifying bad beat occurs at showdown.
+    pub jackpot_balance: i128,
     /// Ledger sequence by which the current player must act. Any other seated
     /// player may call `force_fold` after this deadline is reached.
     pub action_deadline: u32,
+    /// Betting actions taken so far in the current hand. Cleared when a hand
+    /// starts and archived into the hand-history buffer when it settles.
+    pub hand_actions: Vec<ActionRecord>,
 }
 
 #[contracttype]
@@ -151,4 +253,10 @@ pub struct TableState {
 pub enum DataKey {
     Table(u32),
     Paused(u32), // per-table pause flag
+    /// One archived hand: (table_id, circular buffer slot).
+    HandRecord(u32, u32),
+    /// Circular buffer bookkeeping for a table's hand history.
+    HandHistoryMeta(u32),
+    /// Tables a wallet is currently seated at, for multi-table clients.
+    PlayerTables(Address),
 }

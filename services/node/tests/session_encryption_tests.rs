@@ -1,4 +1,4 @@
-use stellpoker_node::crypto::session_encryption::SessionKeyManager;
+use mpc_node::crypto::session_encryption::SessionKeyManager;
 
 #[test]
 fn test_session_key_management() {

@@ -23,7 +23,11 @@ import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
 import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
+import { TableTabs } from "./TableTabs";
 import { ThemeSelector } from "./ThemeSelector";
+import { TableMiniMap } from "./TableMiniMap";
+import { LanguageSelector } from "./LanguageSelector";
+import { useI18n, useT } from "@/lib/i18n/context";
 import { usePokerActions } from "@/lib/use-poker-actions";
 import { getDealerLine } from "@/lib/dealer-lines";
 import { subscribePokerTableEvents } from "@/lib/events";
@@ -97,6 +101,8 @@ function mapOnChainPhase(phase: string): GamePhase | null {
 
 export function Table({ tableId, initialPlayMode }: TableProps) {
   const router = useRouter();
+  const t = useT();
+  const { locale } = useI18n();
   const [game, setGame] = useState<GameState>(() => createInitialState(tableId));
   const [wallet, setWallet] = useState<WalletSession | null>(null);
   const [playMode, setPlayMode] = useState<PlayMode>(initialPlayMode ?? "headsup");
@@ -557,6 +563,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
     winnerAddress,
     userAddress,
     lobby,
+    locale,
   });
 
   // Keyboard shortcuts listener
@@ -770,6 +777,13 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
   return (
     <PixelWorld>
       <div className="min-h-screen flex flex-col items-center gap-4 p-4 pt-6 relative z-[10]">
+        {/* Switcher for a player sitting at several tables at once (#72) */}
+        <TableTabs
+          activeTableId={tableId}
+          activeMode={playMode}
+          address={userAddress ?? null}
+        />
+
         {/* Header bar */}
         <div className="w-full max-w-3xl flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -792,7 +806,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                 textShadow: "2px 2px 0 #2c3e50",
               }}
             >
-              TABLE #{tableId}
+              {t("table.title", { id: tableId })}
             </h1>
             <GameBoyButton onClick={() => setGameboyOpen(true)} />
             <button
@@ -808,7 +822,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
               title="Hand History"
             >
-              HISTORY
+              {t("nav.history")}
             </button>
             <button
               onClick={() => setShortcutsOpen(true)}
@@ -823,14 +837,15 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
               title="Keyboard Shortcuts"
             >
-              KEYS [?]
+              {t("nav.keys")}
             </button>
             <ThemeSelector />
+            <LanguageSelector variant="header" />
           </div>
 
           <div className="flex items-center gap-3">
             <div className="text-[9px]" style={{ color: "#c8e6ff" }}>
-              HAND #{game.handNumber} | {game.phase.toUpperCase()}
+              {t("table.hand", { n: game.handNumber })} | {game.phase.toUpperCase()}
             </div>
             <MpcNodeIndicator tableId={tableId} phase={game.phase} />
 
@@ -853,7 +868,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     textShadow: "1px 1px 0 rgba(0,0,0,0.5)",
                   }}
                 >
-                  {game.lastTxHash ? "VIEW TX ↗" : "EXPLORER ↗"}
+                  {game.lastTxHash ? t("table.viewTx") : t("table.explorer")}
                 </a>
               );
             })()}
@@ -976,6 +991,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     activeEmote={seatEmotes[player.seat]}
                     boardCards={game.boardCards}
                     gamePhase={game.phase}
+                    showStatsTooltip={playMode !== "single"}
                   />
                 ))}
 
@@ -1073,7 +1089,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     <Card faceDown size="md" />
                   </div>
                   <div className="text-[9px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                    {wallet ? "WAITING TO JOIN..." : "CONNECT WALLET"}
+                    {wallet ? t("table.waitingToJoin") : t("table.connectWallet")}
                   </div>
                 </div>
               )}
@@ -1093,7 +1109,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
             />
             <span className="text-[8px]" style={{ color: "#7f8c8d" }}>
-              MPC: 3/3 NODES | TACEO CO-NOIR REP3
+              {t("table.mpcStatus")}
             </span>
           </div>
           {game.lastTxHash && (
@@ -1137,6 +1153,9 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         onClose={() => setHistoryOpen(false)}
         entries={historyEntries}
       />
+
+      {/* Issue #53 — collapsible multi-table overview */}
+      <TableMiniMap currentTableId={tableId} defaultCollapsed />
 
       {shortcutsOpen && (
         <div

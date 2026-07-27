@@ -21,11 +21,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "tls1
 tokio-rustls = "0.26"
 rustls-pki-types = "1"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
-hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "service"] }
 x509-cert = "0.2"
 sha2 = "0.10"
 tower = "0.4"
 zeroize = { version = "1", features = ["derive"] }
+prometheus = "0.14"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

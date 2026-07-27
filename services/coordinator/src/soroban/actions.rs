@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use tokio::process::Command;
 
 use super::{
-    invoke_contract_with_retries, invoke_contract_with_source_retries, parse_i128_value,
-    parse_tx_result, parse_u32_from_stdout, parse_u32_value, resolve_onchain_table_id,
-    SorobanConfig,
+    invoke_committee_registry_with_source, invoke_contract_with_retries,
+    invoke_contract_with_source_retries, parse_i128_value, parse_tx_result,
+    parse_u32_from_stdout, parse_u32_value, resolve_onchain_table_id, SorobanConfig,
 };
+use crate::key_rotation::CommitteeKey;
 
 fn resolve_buy_in_from_table_state(state: &serde_json::Value, requested: i128) -> i128 {
     let min_buy_in = state
@@ -68,6 +69,61 @@ fn looks_like_insufficient_balance(error: &str) -> bool {
     let e = error.to_ascii_lowercase();
     e.contains("resulting balance is not within the allowed range")
         || (e.contains("error(contract, #10)") && e.contains("transfer"))
+}
+
+/// Register a freshly-rotated committee identity with the on-chain
+/// committee-registry (Issue #102).
+///
+/// `register_member` requires the *new* key's own authorization and stakes
+/// `min_stake` of the configured token from its balance, so the address is
+/// friendbot-funded first on networks where that's available (local/testnet;
+/// a no-op elsewhere, matching the funding behavior already used for player
+/// buy-ins in this module).
+pub async fn register_rotated_committee_key(
+    config: &SorobanConfig,
+    new_key: &CommitteeKey,
+    min_stake: i128,
+    endpoint: &str,
+    region: &str,
+) -> Result<String, String> {
+    maybe_friendbot_top_up(config, &new_key.address).await;
+
+    let args = vec![
+        "register_member".to_string(),
+        "--member".to_string(),
+        new_key.address.clone(),
+        "--stake".to_string(),
+        min_stake.to_string(),
+        "--endpoint".to_string(),
+        endpoint.to_string(),
+        "--region".to_string(),
+        region.to_string(),
+    ];
+
+    let output = invoke_committee_registry_with_source(config, &new_key.secret_key, args).await?;
+    parse_tx_result(output)
+}
+
+/// Deregister a retiring committee identity once its overlap window has
+/// elapsed, reclaiming its staked bond (Issue #102).
+///
+/// Per the contract, this fails while the retiring address is still listed
+/// in the current epoch's member set — callers must rotate the active epoch
+/// (or wait for it to naturally roll to one excluding the retiring key)
+/// before this succeeds.
+pub async fn deregister_rotated_committee_key(
+    config: &SorobanConfig,
+    retiring_key: &CommitteeKey,
+) -> Result<String, String> {
+    let args = vec![
+        "deregister_member".to_string(),
+        "--member".to_string(),
+        retiring_key.address.clone(),
+    ];
+
+    let output =
+        invoke_committee_registry_with_source(config, &retiring_key.secret_key, args).await?;
+    parse_tx_result(output)
 }
 
 /// When reveal is requested directly from the frontend, advance one legal betting

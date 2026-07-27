@@ -51,6 +51,7 @@ mod discovery;
 mod feature_flags;
 mod hot_reload;
 mod idempotency;
+mod key_rotation;
 mod leader_election;
 mod mpc;
 mod mpc_auth_middleware;
@@ -64,7 +65,6 @@ mod rate_limit_db;
 mod request_log;
 mod session_cache;
 mod session_gc;
-mod session_migration;
 mod session_migration;
 mod soroban;
 mod stats;
@@ -141,6 +141,7 @@ struct HealthResponse {
         api::get_chain_config,
         api::create_table,
         api::list_open_tables,
+        api::list_table_overview,
         api::join_table,
         api::get_table_lobby,
         api::request_deal,
@@ -201,6 +202,11 @@ struct HealthResponse {
         api::types::CreateTableResponse,
         api::types::OpenTablesResponse,
         api::types::OpenTableInfo,
+        api::types::TableOverviewResponse,
+        api::types::TableOverviewInfo,
+        stats::PlayerHudStats,
+        stats::RatingEntry,
+        stats::RatingLeaderboardResponse,
         api::types::JoinTableResponse,
         api::types::TableLobbyResponse,
         api::types::LobbySeat,
@@ -289,6 +295,11 @@ struct AppState {
     idempotency_store: idempotency::IdempotencyStore,
     /// MPC deal phase benchmarks (Issue #100).
     benchmark_store: mpc_benchmark::BenchmarkStore,
+    /// Rotating committee-registry identity used for node registration /
+    /// staking (Issue #102). Kept separate from `soroban_config.secret_key`
+    /// (the general transaction-submission identity) so rotating it can't
+    /// disrupt in-flight gameplay transaction signing.
+    committee_key_rotation: Arc<RwLock<key_rotation::KeyRotationState>>,
 }
 
 #[derive(Clone)]
@@ -639,6 +650,25 @@ async fn main() {
     let archive_store = archiver::new_store();
     archiver::load_existing_archives(&archive_store, &archive_config).await;
 
+    // Committee identity rotation (Issue #102): bootstrap from the
+    // already-configured COMMITTEE_SECRET so an existing on-chain
+    // registration is treated as the initial "active" key.
+    let committee_key_rotation = {
+        let now = SystemTime::now();
+        let initial_key = key_rotation::CommitteeKey::from_secret(&soroban_config.secret_key, now)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "COMMITTEE_SECRET is not a valid Stellar key ({e}); generating an ephemeral \
+                     identity for committee key rotation tracking"
+                );
+                key_rotation::CommitteeKey::generate(now)
+            });
+        Arc::new(RwLock::new(key_rotation::KeyRotationState::new(
+            initial_key,
+            key_rotation::RotationConfig::from_env(),
+        )))
+    };
+
     let state = AppState {
         tables: Arc::clone(&tables),
         lobby_assignments: Arc::clone(&lobby_assignments),
@@ -664,8 +694,13 @@ async fn main() {
         node_registry: Arc::new(RwLock::new(discovery::NodeRegistry::new())),
         idempotency_store: idempotency::new_store(),
         benchmark_store,
+        committee_key_rotation,
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
+    key_rotation::spawn_rotation_task(
+        state.committee_key_rotation.clone(),
+        state.soroban_config.clone(),
+    );
 
     if let Some(path) = hot_reload_snapshot {
         hot_reload::spawn_snapshot_task(path, Arc::clone(&tables), Arc::clone(&lobby_assignments));
@@ -769,6 +804,12 @@ async fn main() {
         )
         .route("/api/tables/create", post(api::create_table))
         .route("/api/tables/open", get(api::list_open_tables))
+        .route("/api/tables/overview", get(api::list_table_overview))
+        .route("/api/stats/player/:address", get(get_player_hud_stats))
+        .route(
+            "/api/ratings/leaderboard",
+            get(get_rating_leaderboard),
+        )
         .route("/api/chain-config", get(api::get_chain_config))
         .route("/api/table/:table_id/join", post(api::join_table))
         .route("/api/table/:table_id/lobby", get(api::get_table_lobby))
@@ -841,6 +882,10 @@ async fn main() {
             post(api::admin_verify_audit_chain),
         )
         .route("/api/admin/migrations", get(api::admin_list_migrations))
+        .route(
+            "/api/admin/committee-key-rotation",
+            get(api::admin_committee_key_rotation_status),
+        )
         .route(
             "/api/admin/migrations/initiate",
             post(api::admin_initiate_migration),
@@ -1241,6 +1286,32 @@ async fn handle_game_state_socket(socket: WebSocket, table_id: u32, state: AppSt
 async fn get_stats(State(state): State<AppState>) -> Json<stats::StatsResponse> {
     let ttl = std::time::Duration::from_secs(30);
     Json(stats::get_stats(&state.stats, ttl).await)
+}
+
+/// GET /api/stats/player/:address — HUD stats for seat tooltip (Issue #55).
+async fn get_player_hud_stats(
+    State(state): State<AppState>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+) -> Json<stats::PlayerHudStats> {
+    Json(stats::get_player_hud(&state.stats, &address).await)
+}
+
+/// GET /api/ratings/leaderboard — on-chain ELO leaderboard cache (Issue #70).
+async fn get_rating_leaderboard(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<stats::RatingLeaderboardResponse> {
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 50);
+    stats::ensure_demo_ratings(&state.stats).await;
+    Json(stats::get_rating_leaderboard(&state.stats, offset, limit).await)
 }
 
 async fn get_benchmarks(State(state): State<AppState>) -> Json<serde_json::Value> {

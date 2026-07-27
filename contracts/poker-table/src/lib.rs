@@ -9,6 +9,7 @@ mod game;
 mod game_hub;
 #[cfg(test)]
 mod gas_regression_test;
+mod history;
 #[cfg(test)]
 mod invariants_test;
 #[cfg(test)]
@@ -123,6 +124,76 @@ fn verify_hole_cards_against_proof(
     Ok(())
 }
 
+/// Record that `player` now holds a seat at `table_id`.
+///
+/// The index is a convenience for multi-table clients, not a limit: nothing
+/// here rejects a wallet for sitting at too many tables. Its length is the
+/// number of live seats the wallet holds, which is bounded in practice by the
+/// buy-in each seat costs.
+fn index_player_table(env: &Env, player: &Address, table_id: u32) {
+    let key = DataKey::PlayerTables(player.clone());
+    let mut tables: Vec<u32> = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or_else(|| Vec::new(env));
+
+    for i in 0..tables.len() {
+        if let Some(existing) = tables.get(i) {
+            if constant_time::u32_eq(existing, table_id) {
+                return; // already indexed
+            }
+        }
+    }
+
+    tables.push_back(table_id);
+    env.storage().persistent().set(&key, &tables);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, TABLE_TTL_THRESHOLD, TABLE_TTL_EXTEND);
+}
+
+/// Drop `table_id` from `player`'s seat index.
+fn unindex_player_table(env: &Env, player: &Address, table_id: u32) {
+    let key = DataKey::PlayerTables(player.clone());
+    let tables: Vec<u32> = match env.storage().persistent().get(&key) {
+        Some(t) => t,
+        None => return,
+    };
+
+    let mut remaining: Vec<u32> = Vec::new(env);
+    for i in 0..tables.len() {
+        if let Some(existing) = tables.get(i) {
+            if constant_time::u32_ne(existing, table_id) {
+                remaining.push_back(existing);
+            }
+        }
+    }
+
+    if remaining.is_empty() {
+        env.storage().persistent().remove(&key);
+    } else {
+        env.storage().persistent().set(&key, &remaining);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, TABLE_TTL_THRESHOLD, TABLE_TTL_EXTEND);
+    }
+}
+
+/// Find a seated player's index, or `PlayerNotAtTable`.
+fn find_seat(env: &Env, table: &TableState, player: &Address) -> Result<u32, PokerTableError> {
+    for i in 0..table.players.len() {
+        let p = table
+            .players
+            .get(i)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        if constant_time::address_eq(env, &p.address, player) {
+            return Ok(i);
+        }
+    }
+    Err(PokerTableError::PlayerNotAtTable)
+}
+
 fn derive_session_id(table_id: u32, hand_number: u32) -> u32 {
     // Deterministic 32-bit hash of (table_id, hand_number).
     let mut x = table_id ^ hand_number.rotate_left(16);
@@ -179,6 +250,8 @@ impl PokerTableContract {
             session_id: 0,
             rake_balance: 0,
             action_deadline: 0,
+            hand_actions: Vec::new(&env),
+            jackpot_balance: 0,
         };
 
         save_table(&env, &table);
@@ -239,9 +312,12 @@ impl PokerTableContract {
             all_in: false,
             sitting_out: false,
             seat_index: seat,
+            total_buy_in: buy_in,
+            rebuy_count: 0,
         });
 
         save_table(&env, &table);
+        index_player_table(&env, &player, table_id);
 
         env.events().publish(
             (Symbol::new(&env, "player_joined"), table_id),
@@ -249,6 +325,131 @@ impl PokerTableContract {
         );
 
         Ok(seat)
+    }
+
+    /// Tables a wallet is currently seated at.
+    ///
+    /// A wallet may sit at any number of tables at once — there is no per-player
+    /// cap, only the per-table `max_players` and whatever capital the player is
+    /// willing to put up. This index exists so a multi-table client can restore
+    /// a player's open seats after a reload without scanning every table.
+    ///
+    /// The list is maintained on `join_table` and `leave_table`, so it holds
+    /// only live seats.
+    pub fn get_player_tables(env: Env, player: Address) -> Vec<u32> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerTables(player))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Number of tables a wallet is currently seated at.
+    pub fn get_player_table_count(env: Env, player: Address) -> u32 {
+        Self::get_player_tables(env, player).len()
+    }
+
+    /// Top a seated player's stack up by a partial amount.
+    ///
+    /// A rebuy may be for any amount that leaves the player's stack inside the
+    /// table's `[min_buy_in, max_buy_in]` band — it does not have to be a full
+    /// buy-in. A player who has been ground down to 40 chips at a 100/1000
+    /// table can add anywhere from 60 (back to the minimum) to 960 (up to the
+    /// maximum). A single rebuy may never exceed one full buy-in.
+    ///
+    /// Rebuys are only allowed between hands, so the chips cannot appear
+    /// mid-hand and change what an opponent is playing against. Each one is
+    /// counted against `TableConfig::max_rebuys` (0 = unlimited).
+    ///
+    /// Returns the player's new stack.
+    pub fn rebuy(
+        env: Env,
+        table_id: u32,
+        player: Address,
+        amount: i128,
+    ) -> Result<i128, PokerTableError> {
+        player.require_auth();
+        require_not_paused(&env, table_id)?;
+
+        let mut table = load_table(&env, table_id)?;
+
+        // Chips may only enter between hands — never while a hand is live.
+        if !matches!(table.phase, GamePhase::Waiting | GamePhase::Settlement) {
+            return Err(PokerTableError::CannotRebuyDuringActiveHand);
+        }
+
+        let seat = find_seat(&env, &table, &player)?;
+        let mut p = table
+            .players
+            .get(seat)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+
+        if table.config.max_rebuys > 0 && p.rebuy_count >= table.config.max_rebuys {
+            return Err(PokerTableError::RebuyLimitReached);
+        }
+
+        let new_stack = p.stack + amount;
+        if amount <= 0
+            || amount > table.config.max_buy_in
+            || new_stack > table.config.max_buy_in
+            || new_stack < table.config.min_buy_in
+        {
+            return Err(PokerTableError::InvalidRebuyAmount);
+        }
+
+        // Take the chips before crediting the stack.
+        let token = token::Client::new(&env, &table.config.token);
+        token.transfer(&player, &env.current_contract_address(), &amount);
+
+        p.stack = new_stack;
+        p.total_buy_in += amount;
+        p.rebuy_count += 1;
+        let rebuy_count = p.rebuy_count;
+        table.players.set(seat, p);
+
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "player_rebuy"), table_id),
+            (player, amount, new_stack, rebuy_count),
+        );
+
+        Ok(new_stack)
+    }
+
+    /// Chips a seated player has deposited this session (initial buy-in plus
+    /// every rebuy) and how many rebuys they have used.
+    pub fn get_player_buy_in(
+        env: Env,
+        table_id: u32,
+        player: Address,
+    ) -> Result<(i128, u32), PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        let seat = find_seat(&env, &table, &player)?;
+        let p = table
+            .players
+            .get(seat)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        Ok((p.total_buy_in, p.rebuy_count))
+    }
+
+    /// Update the per-session rebuy limit (admin only). `0` means unlimited.
+    /// Lowering the limit below what a player has already used simply stops
+    /// them rebuying again; it never claws chips back.
+    pub fn set_max_rebuys(
+        env: Env,
+        table_id: u32,
+        max_rebuys: u32,
+    ) -> Result<(), PokerTableError> {
+        let mut table = load_table(&env, table_id)?;
+        table.admin.require_auth();
+        table.config.max_rebuys = max_rebuys;
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "max_rebuys_updated"), table_id),
+            max_rebuys,
+        );
+        Ok(())
     }
 
     /// Leave the table and withdraw remaining stack.
@@ -287,9 +488,34 @@ impl PokerTableContract {
         if !found {
             return Err(PokerTableError::PlayerNotAtTable);
         }
+
+        // Renumber the remaining seats so `seat_index` keeps matching the
+        // player's position in the vector. Betting, side-pot eligibility and
+        // the showdown proof's seat-indexed public outputs all treat the two as
+        // the same number, so a gap left by the departing player would send
+        // actions and payouts to the wrong seat. Leaving is only allowed
+        // between hands, so no pot state depends on the old numbering.
+        for i in 0..new_players.len() {
+            let mut p = new_players
+                .get(i)
+                .ok_or(PokerTableError::InvalidPlayerIndex)?;
+            p.seat_index = i;
+            new_players.set(i, p);
+        }
         table.players = new_players;
 
+        // Keep the button and the turn pointer inside the shrunken table.
+        let remaining = table.players.len() as u32;
+        if remaining == 0 {
+            table.dealer_seat = 0;
+            table.current_turn = 0;
+        } else {
+            table.dealer_seat %= remaining;
+            table.current_turn %= remaining;
+        }
+
         save_table(&env, &table);
+        unindex_player_table(&env, &player, table_id);
 
         env.events().publish(
             (Symbol::new(&env, "player_left"), table_id),
@@ -502,6 +728,12 @@ impl PokerTableContract {
     }
 
     /// Submit showdown: reveal hole cards, verify winner, settle.
+    ///
+    /// `bad_beat_scores` is a committee-submitted vector of `(seat, hand_score)`
+    /// pairs for every non-folded player at showdown.  The contract checks
+    /// these against the configured bad-beat threshold and, if a qualifying
+    /// losing hand exists, pays out the jackpot pool.  Pass an empty vector
+    /// to skip the check.
     pub fn submit_showdown(
         env: Env,
         table_id: u32,
@@ -510,6 +742,7 @@ impl PokerTableContract {
         _salts: Vec<(BytesN<32>, BytesN<32>)>,
         proof: Bytes,
         public_inputs: Bytes,
+        bad_beat_scores: Vec<(u32, u32)>,
     ) -> Result<(), PokerTableError> {
         committee.require_auth();
         require_not_paused(&env, table_id)?;
@@ -566,7 +799,7 @@ impl PokerTableContract {
 
         // Settle using the proved winner and optional tie mask from the proof
         // (not re-evaluating hands on-chain).
-        game::settle_showdown(&env, &mut table, winner_index, tie_mask)?;
+        game::settle_showdown(&env, &mut table, winner_index, tie_mask, &bad_beat_scores)?;
 
         save_table(&env, &table);
         Ok(())
@@ -610,6 +843,38 @@ impl PokerTableContract {
     /// Read current table state (view function).
     pub fn get_table(env: Env, table_id: u32) -> Result<TableState, PokerTableError> {
         load_table(&env, table_id)
+    }
+
+    // ========================================================================
+    // Hand History (read-only)
+    // ========================================================================
+
+    /// Read the most recently completed hands, newest first.
+    ///
+    /// The table keeps a circular buffer of the last
+    /// `history::HAND_HISTORY_CAPACITY` settled hands. Pass `limit = 0` to read
+    /// every retained record, or a smaller number to page in just the latest
+    /// few. Hands older than the window have been overwritten and are only
+    /// recoverable from the `hand_archived` event stream.
+    pub fn get_hand_history(env: Env, table_id: u32, limit: u32) -> Vec<HandRecord> {
+        history::get_history(&env, table_id, limit)
+    }
+
+    /// Read a single archived hand by its hand number. Returns `None` once the
+    /// hand has been evicted from the circular buffer.
+    pub fn get_hand(env: Env, table_id: u32, hand_number: u32) -> Option<HandRecord> {
+        history::get_hand(&env, table_id, hand_number)
+    }
+
+    /// Bookkeeping for a table's hand-history buffer: how many records are
+    /// retained right now and how many hands have been archived in total.
+    pub fn get_hand_history_meta(env: Env, table_id: u32) -> HandHistoryMeta {
+        history::load_meta(&env, table_id)
+    }
+
+    /// Number of hands the history buffer can hold before it starts evicting.
+    pub fn hand_history_capacity() -> u32 {
+        history::HAND_HISTORY_CAPACITY
     }
 
     // ========================================================================
@@ -727,6 +992,52 @@ impl PokerTableContract {
     pub fn get_rake_balance(env: Env, table_id: u32) -> Result<i128, PokerTableError> {
         let table = load_table(&env, table_id)?;
         Ok(table.rake_balance)
+    }
+
+    /// Read the bad-beat jackpot pool balance for a table (view function).
+    pub fn get_jackpot_balance(env: Env, table_id: u32) -> Result<i128, PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        Ok(table.jackpot_balance)
+    }
+
+    /// Read the jackpot configuration parameters for a table (view function).
+    pub fn get_jackpot_config(
+        env: Env,
+        table_id: u32,
+    ) -> Result<(u32, u32, u32), PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        Ok((
+            table.config.jackpot_rake_share_bps,
+            table.config.min_bad_beat_category,
+            table.config.min_bad_beat_rank,
+        ))
+    }
+
+    /// Update the jackpot configuration (admin only).
+    ///
+    /// `jackpot_rake_share_bps` is the share of each hand's rake, in basis
+    /// points, that feeds the jackpot pool (`0` disables the jackpot).
+    /// `min_category` and `min_rank` define the qualifying hand threshold
+    /// (defaults: category 7 = FourOfAKind, rank 12 = Ace).
+    pub fn set_jackpot_config(
+        env: Env,
+        table_id: u32,
+        jackpot_rake_share_bps: u32,
+        min_category: u32,
+        min_rank: u32,
+    ) -> Result<(), PokerTableError> {
+        let mut table = load_table(&env, table_id)?;
+        table.admin.require_auth();
+        table.config.jackpot_rake_share_bps = jackpot_rake_share_bps;
+        table.config.min_bad_beat_category = min_category;
+        table.config.min_bad_beat_rank = min_rank;
+        save_table(&env, &table);
+
+        env.events().publish(
+            (Symbol::new(&env, "jackpot_config_updated"), table_id),
+            (jackpot_rake_share_bps, min_category, min_rank),
+        );
+        Ok(())
     }
 
     /// Withdraw the accumulated rake to the table admin. Returns the amount

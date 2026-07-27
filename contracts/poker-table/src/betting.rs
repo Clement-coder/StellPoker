@@ -2,6 +2,7 @@ use soroban_sdk::{Address, Env, Symbol};
 
 use crate::constant_time;
 use crate::game;
+use crate::history;
 use crate::types::*;
 
 /// Process a player's betting action.
@@ -39,6 +40,7 @@ pub fn process_action(
             // Check if only one player remains
             if game::active_player_count(table) == 1 {
                 emit_action(env, table, player, action, 0);
+                history::record_action(env, table, seat, action, 0);
                 game::settle_fold_win(env, table)?;
                 return Ok(());
             }
@@ -120,6 +122,7 @@ pub fn process_action(
     // Emit a per-action event so the frontend can react without polling. The
     // amount is the chips added to the pot by this action (0 for fold/check).
     emit_action(env, table, player, action, table.pot - pot_before);
+    history::record_action(env, table, seat, action, table.pot - pot_before);
 
     table.last_action_ledger = env.ledger().sequence();
     // Reset action deadline for the next player
