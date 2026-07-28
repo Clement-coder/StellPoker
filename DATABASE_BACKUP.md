@@ -5,6 +5,7 @@ This document describes the automated backup and restore system for the StellPok
 ## Overview
 
 The backup system provides:
+- **Database Schema & ER Diagram**: Reference available at [`docs/database-schema.md`](docs/database-schema.md)
 - **Automated daily backups** with encryption support
 - **Tiered retention policy**: 7 days daily, 4 weeks weekly, 12 months monthly
 - **Monthly restore tests** to verify backups can be recovered
