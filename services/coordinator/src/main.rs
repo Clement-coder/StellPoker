@@ -849,6 +849,14 @@ async fn main() {
             get(api::get_player_cards),
         )
         .route("/api/table/:table_id/state", get(api::get_table_state))
+        .route(
+            "/api/table/:table_id/players",
+            get(api::get_players_paginated),
+        )
+        .route(
+            "/api/table/:table_id/hand-history/chunk",
+            get(api::get_hand_history_chunk),
+        )
         .route("/api/table/:table_id/mpc-status", get(api::get_mpc_status))
         .route("/api/committee/status", get(api::committee_status))
         .route("/api/table/:table_id/chat/ws", get(chat_ws_handler))

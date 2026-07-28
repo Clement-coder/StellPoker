@@ -1409,6 +1409,87 @@ pub async fn get_table_state(
     Ok(Json(TableStateResponse { state: result }))
 }
 
+/// GET /api/table/{table_id}/players?offset=0&limit=6
+///
+/// Offset-based paginated player list. Extends TTL of the table entry
+/// (bump-on-read pattern) to keep the pagination cursor alive.
+pub async fn get_players_paginated(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    Query(params): Query<PaginatedQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(6).min(50);
+    let raw = soroban::get_players_paginated(&state.soroban_config, table_id, offset, limit)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to read paginated players: {}", e);
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+
+    let players: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Array(vec![]));
+
+    // Also fetch total count
+    let total_raw = soroban::get_player_count(&state.soroban_config, table_id).await;
+    let total: u32 = total_raw
+        .ok()
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+        .and_then(|v| v.as_u64().map(|n| n as u32))
+        .unwrap_or(0);
+
+    Ok(Json(serde_json::json!({
+        "players": players,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    })))
+}
+
+/// GET /api/table/{table_id}/hand-history/chunk?offset=0&limit=5
+///
+/// Offset-based paginated hand history (newest first). Each hand record
+/// read on-chain has its TTL extended, keeping pagination cursors alive.
+pub async fn get_hand_history_chunk(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    Query(params): Query<PaginatedQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(5).min(16);
+    let raw =
+        soroban::get_hand_history_chunk(&state.soroban_config, table_id, offset, limit)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to read hand history chunk: {}", e);
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+
+    let records: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Array(vec![]));
+
+    // Also fetch the meta for total available
+    let meta_raw = soroban::get_table_state(&state.soroban_config, table_id)
+        .await
+        .ok()
+        .and_then(|r| {
+            serde_json::from_str::<serde_json::Value>(&r).ok()
+        });
+    let total = meta_raw
+        .as_ref()
+        .and_then(|v| v.get("hand_number"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    Ok(Json(serde_json::json!({
+        "records": records,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "capacity": 16u32,
+    })))
+}
+
 /// GET /api/table/{table_id}/mpc-status
 ///
 /// Returns per-node MPC phase progress for the table's current operation.
