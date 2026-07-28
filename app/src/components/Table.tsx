@@ -827,7 +827,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
   return (
     <PixelWorld>
-      <div className="min-h-screen flex flex-col items-center gap-4 p-4 pt-6 relative z-[10]">
+      <div className="min-h-screen flex flex-col items-center gap-4 p-2 sm:p-4 pt-4 sm:pt-6 relative z-[10]">
         {/* Switcher for a player sitting at several tables at once (#72) */}
         {showSkeleton ? (
           <div className="w-full max-w-3xl p-6">
@@ -853,8 +853,8 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         )}
 
         {/* Header bar */}
-        <div className="w-full max-w-3xl flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="table-header w-full max-w-3xl flex items-center justify-between flex-wrap gap-2">
+          <div className="nav-links flex items-center gap-2 sm:gap-3 flex-wrap">
             <Link
               href="/"
               className="text-[24px]"
@@ -912,7 +912,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             <LanguageSelector variant="header" />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="table-header-right flex items-center gap-2 sm:gap-3">
             <div className="text-[9px]" style={{ color: "#c8e6ff" }}>
               {t("table.hand", { n: game.handNumber })} | {game.phase.toUpperCase()}
             </div>
@@ -960,7 +960,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
         {/* Dealer line */}
         <div
-          className="w-full max-w-3xl pixel-border-thin px-4 py-2"
+          className="dealer-line w-full max-w-3xl pixel-border-thin px-3 sm:px-4 py-2"
           style={{
             background: loading
               ? "rgba(40, 20, 8, 0.9)"
@@ -1022,9 +1022,9 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         )}
 
         {/* ═══ THE POKER TABLE ═══ */}
-        <div className="w-full max-w-3xl relative" style={{ minHeight: "400px" }}>
+        <div className="table-container w-full max-w-3xl relative" style={{ minHeight: "400px" }}>
           <div
-            className="pixel-border relative w-full flex flex-col items-center justify-center gap-4"
+            className="table-felt pixel-border relative w-full flex flex-col items-center justify-center gap-4"
             style={{
               background:
                 "radial-gradient(ellipse at center, var(--felt-light) 0%, var(--felt-mid) 40%, var(--felt-dark) 100%)",
@@ -1043,7 +1043,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             />
 
             {/* ── OPPONENTS (top) ── */}
-            <div className="flex flex-wrap gap-6 items-end justify-center">
+            <div className="opponents-row flex flex-wrap gap-4 sm:gap-6 items-end justify-center">
               {game.players
                 .filter((p) => !userAddress || p.address !== userAddress)
                 .map((player) => (
@@ -1132,7 +1132,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             </div>
 
             {/* ── YOU (bottom) ── */}
-            <div className="flex gap-4 items-start">
+            <div className="user-seat-row flex gap-4 items-start justify-center">
               {userPlayer ? (
                 <PlayerSeat
                   player={userPlayer}
@@ -1173,7 +1173,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         </div>
 
         {/* MPC Status footer */}
-        <div className="flex flex-col items-center gap-1 mt-2">
+        <div className="mpc-footer flex flex-col items-center gap-1 mt-2">
           <div className="flex items-center gap-2">
             <div
               style={{
@@ -1209,10 +1209,10 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           )}
         </div>
 
-        <div className="fixed bottom-0 left-[5%] z-[5]" style={{ transform: 'translateY(15%)' }}>
+        <div className="deco-cat fixed bottom-0 left-[5%] z-[5]" style={{ transform: 'translateY(15%)' }}>
           <PixelCat sprite={17} size={36} />
         </div>
-        <div className="fixed bottom-0 right-[5%] z-[5]" style={{ transform: 'translateY(10%)' }}>
+        <div className="deco-cat fixed bottom-0 right-[5%] z-[5]" style={{ transform: 'translateY(10%)' }}>
           <PixelCat sprite={21} size={48} flipped />
         </div>
       </div>
@@ -1284,7 +1284,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           setChatOpen((prev) => !prev);
           setNewMessagesCount(0);
         }}
-        className="pixel-btn pixel-btn-blue text-[9px] fixed bottom-4 right-4 z-40"
+        className="chat-toggle-btn pixel-btn pixel-btn-blue text-[9px] fixed bottom-4 right-4 z-40"
         style={{ padding: "8px 12px" }}
       >
         CHAT {newMessagesCount > 0 ? `(${newMessagesCount})` : ""}
@@ -1293,7 +1293,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
       {/* Floating Chat Drawer */}
       {chatOpen && (
         <div
-          className="pixel-border-thin fixed bottom-16 right-4 z-40 flex flex-col w-72 h-64 p-3 gap-2"
+          className="chat-drawer pixel-border-thin fixed bottom-16 right-4 z-40 flex flex-col w-72 h-64 p-3 gap-2"
           style={{
             background: "rgba(20, 12, 8, 0.95)",
             borderColor: "var(--ui-border)",

@@ -465,3 +465,185 @@ input[type="text"]:focus {
   }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Mobile-responsive layout (#18)
+   Target: ≥375px portrait. Breakpoints: 640px (sm), 480px, 375px.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Prevent iOS Safari from zooming inputs (Freighter mobile browser compat) */
+input[type="number"],
+input[type="text"],
+select,
+textarea {
+  font-size: max(16px, 1em);
+}
+
+/* ── Poker table container ── */
+@media (max-width: 640px) {
+  /* Let the table fill the full viewport width with minimal padding */
+  .table-container {
+    padding: 0 8px !important;
+    max-width: 100vw !important;
+  }
+
+  /* Tighten the felt surface padding on small screens */
+  .table-felt {
+    padding: 20px 8px !important;
+    min-height: 280px !important;
+  }
+
+  /* Stack the header bar vertically on mobile */
+  .table-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+  }
+
+  .table-header-right {
+    align-self: flex-end !important;
+  }
+
+  /* Dealer status bar: reduce font size */
+  .dealer-line {
+    font-size: 8px !important;
+  }
+
+  /* Opponent row: wrap when > 2 players */
+  .opponents-row {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    justify-content: center !important;
+  }
+
+  /* User seat: full-width on mobile */
+  .user-seat-row {
+    justify-content: center !important;
+  }
+
+  /* Action panel buttons: fill width on mobile */
+  .action-panel-buttons {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+
+  .action-panel-buttons .pixel-btn {
+    flex: 1 1 calc(50% - 6px) !important;
+    min-width: 80px !important;
+    font-size: 9px !important;
+    padding: 8px 6px !important;
+  }
+
+  /* Bet slider row: stack vertically */
+  .bet-slider-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 6px !important;
+  }
+
+  /* Chat drawer: full-width on mobile */
+  .chat-drawer {
+    right: 0 !important;
+    left: 0 !important;
+    bottom: 56px !important;
+    width: 100% !important;
+    border-radius: 0 !important;
+  }
+
+  /* Chat toggle button: stick to bottom edge */
+  .chat-toggle-btn {
+    bottom: 8px !important;
+    right: 8px !important;
+  }
+
+  /* Keyboard shortcuts modal: full screen on mobile */
+  .shortcuts-modal {
+    max-width: 100% !important;
+    margin: 8px !important;
+  }
+
+  /* Table tabs: horizontally scrollable */
+  .table-tabs-row {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    flex-wrap: nowrap !important;
+    padding-bottom: 4px !important;
+  }
+
+  /* MPC footer: tighten spacing */
+  .mpc-footer {
+    margin-top: 8px !important;
+    gap: 4px !important;
+  }
+
+  /* Navigation bar links: smaller text */
+  .nav-links a,
+  .nav-links button {
+    font-size: 7px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Reduce card size further on very small screens */
+  .card-responsive {
+    transform: scale(0.65) !important;
+    transform-origin: center center !important;
+  }
+
+  /* PlayerSeat: compact layout */
+  .player-seat {
+    min-width: 64px !important;
+  }
+
+  /* Hide decorative cats on very small screens to free up space */
+  .deco-cat {
+    display: none !important;
+  }
+
+  /* Board cards: tighter gap */
+  .board-cards-row {
+    gap: 4px !important;
+  }
+
+  /* Pixel buttons: slightly smaller */
+  .pixel-btn {
+    font-size: 8px !important;
+    padding: 7px 10px !important;
+  }
+
+  /* Home screen panel: fill width */
+  .home-panel {
+    min-width: unset !important;
+    width: calc(100vw - 32px) !important;
+  }
+}
+
+@media (max-width: 375px) {
+  /* Minimum viable layout for iPhone SE / small Android */
+  body {
+    font-size: 8px;
+  }
+
+  .pixel-btn {
+    font-size: 7px !important;
+    padding: 6px 8px !important;
+  }
+
+  /* Action panel: single column on 375px */
+  .action-panel-buttons .pixel-btn {
+    flex: 1 1 100% !important;
+  }
+}
+
+/* Ensure touch targets meet 44×44px minimum (WCAG 2.5.5) */
+@media (hover: none) and (pointer: coarse) {
+  .pixel-btn {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Slightly larger tap target for the disconnect button */
+  button[title="Disconnect wallet"] {
+    padding: 8px 10px !important;
+  }
+}

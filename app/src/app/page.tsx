@@ -418,7 +418,7 @@ export default function Home() {
         {/* ────── CONNECT SCREEN ────── */}
         {screen === "connect" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -498,7 +498,7 @@ export default function Home() {
         {/* ────── MENU SCREEN ────── */}
         {screen === "menu" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -538,7 +538,7 @@ export default function Home() {
         {/* ────── CREATE SCREEN ────── */}
         {screen === "create" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -636,7 +636,7 @@ export default function Home() {
         {/* ────── JOIN SCREEN ────── */}
         {screen === "join" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -790,13 +790,13 @@ export default function Home() {
         ) : null}
 
         {/* Cats at bottom */}
-        <div className="fixed bottom-[12%] left-[6%] z-[5]">
+        <div className="deco-cat fixed bottom-[12%] left-[6%] z-[5]">
           <PixelCat sprite={19} size={80} />
         </div>
-        <div className="fixed bottom-[4%] left-[38%] z-[5]">
+        <div className="deco-cat fixed bottom-[4%] left-[38%] z-[5]">
           <PixelCat sprite={18} size={96} />
         </div>
-        <div className="fixed bottom-[12%] right-[6%] z-[5]">
+        <div className="deco-cat fixed bottom-[12%] right-[6%] z-[5]">
           <PixelCat sprite={20} size={96} flipped />
         </div>
 
