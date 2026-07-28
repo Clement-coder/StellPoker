@@ -116,6 +116,14 @@ export default function Home() {
       setScreen("connect");
       setError("Wallet disconnected. Please reconnect to continue.");
     },
+    onAccountSwitch: (newAddress) => {
+      // User switched accounts in Freighter — re-initialise the session with
+      // the new address without forcing a full page reload (#21).
+      setWallet((prev) =>
+        prev ? { ...prev, address: newAddress } : null
+      );
+      setError(null);
+    },
   });
 
   const handleConnect = async (type: WalletType) => {
@@ -208,6 +216,15 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleDisconnect = () => {
+    if (wallet) {
+      import("@/lib/wallet").then(({ clearWallet }) => clearWallet(wallet.walletType));
+    }
+    setWallet(null);
+    setScreen("connect");
+    setError(null);
   };
 
   const shortAddr = wallet
@@ -428,13 +445,18 @@ export default function Home() {
               availableWallets.map((w) => (
                 <button
                   key={w.type}
-                  onClick={() => void handleConnect(w.type)}
-                  disabled={connecting !== null || !w.isInstalled}
+                  onClick={() => w.isInstalled ? void handleConnect(w.type) : window.open(
+                    w.type === "freighter"
+                      ? "https://www.freighter.app"
+                      : "https://lobstr.co/universal-wallet",
+                    "_blank", "noopener,noreferrer"
+                  )}
+                  disabled={connecting !== null}
                   className="pixel-btn text-[12px] w-full"
                   style={{
                     padding: "12px 24px",
-                    opacity: !w.isInstalled || connecting !== null ? 0.5 : 1,
-                    background: w.type === "freighter" ? "#1a5276" : "#6c3483",
+                    opacity: connecting !== null ? 0.5 : 1,
+                    background: w.type === "freighter" ? (w.isInstalled ? "#1a5276" : "#2c3e50") : (w.isInstalled ? "#6c3483" : "#2c3e50"),
                     color: "white",
                   }}
                 >
@@ -442,9 +464,22 @@ export default function Home() {
                     ? `CONNECTING ${w.name}...`
                     : w.isInstalled
                       ? `CONNECT ${w.name}`
-                      : `${w.name} NOT DETECTED`}
+                      : `INSTALL ${w.name} ↗`}
                 </button>
               ))
+            )}
+
+            {availableWallets.every((w) => !w.isInstalled) && availableWallets.length > 0 && (
+              <div
+                className="pixel-border-thin w-full p-2 text-[9px]"
+                style={{
+                  background: "rgba(40,10,10,0.5)",
+                  borderColor: "#c0392b",
+                  color: "#e74c3c",
+                }}
+              >
+                NO WALLET DETECTED. INSTALL FREIGHTER OR LOBSTR TO PLAY.
+              </div>
             )}
 
             <div
@@ -708,10 +743,10 @@ export default function Home() {
           </div>
         )}
 
-          {/* Wallet status — centered below panel with dim pulse */}
+          {/* Wallet status — address + disconnect button */}
         {wallet ? (
           <div
-            className="pixel-border-thin px-3 py-1"
+            className="flex items-center gap-2 pixel-border-thin px-3 py-1"
             style={{
               background: "rgba(39, 174, 96, 0.15)",
               fontSize: "9px",
@@ -719,7 +754,23 @@ export default function Home() {
               animation: "walletPulse 3s ease-in-out infinite",
             }}
           >
-            {walletLabel}
+            <span title={wallet.address}>{walletLabel}</span>
+            <button
+              onClick={handleDisconnect}
+              title="Disconnect wallet"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "#e74c3c",
+                fontFamily: "'Press Start 2P', monospace",
+                fontSize: "8px",
+                padding: "0 0 0 6px",
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
           </div>
         ) : screen !== "connect" ? (
           <button

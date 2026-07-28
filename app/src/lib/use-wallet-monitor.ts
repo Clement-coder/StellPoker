@@ -2,39 +2,47 @@
 
 import { useEffect, useRef } from "react";
 import { checkWalletStillConnected, clearWallet, type WalletSession } from "./wallet";
+import { subscribeToAccountChanges } from "./freighter";
 
 const POLL_MS = 3_000;
 
 /**
- * Polls the active wallet every 3 s while a session exists.
- * Supports both Freighter and Lobstr via the WalletSession.walletType field.
+ * Monitors the active wallet session for two conditions:
  *
- * The first time the wallet reports as disconnected, clears its localStorage
- * entry and calls onDisconnect so the caller can sign the user out.
+ * 1. **Disconnection** — wallet reports as no longer connected.
+ *    Clears localStorage and calls `onDisconnect`.
  *
- * Pass wallet={null} to disable — the hook is a no-op until a session exists,
- * avoiding false positives during the initial silent-reconnect window.
+ * 2. **Account switch** — user selects a different account in Freighter
+ *    without disconnecting first.  Calls `onAccountSwitch(newAddress)` so
+ *    the caller can re-initialise the session with the new address.
+ *    Only active for Freighter (Lobstr does not support in-browser switching).
+ *
+ * Pass `wallet={null}` to disable — the hook is a no-op until a session
+ * exists, avoiding false positives during the initial silent-reconnect window.
  */
 export function useWalletMonitor({
   wallet,
   onDisconnect,
+  onAccountSwitch,
 }: {
   wallet: WalletSession | null;
   onDisconnect: () => void;
+  onAccountSwitch?: (newAddress: string) => void;
 }) {
-  // Keep the latest callback in a ref so changing it doesn't restart the effect.
+  // Keep latest callbacks in refs so changes don't restart the intervals.
   const onDisconnectRef = useRef(onDisconnect);
   onDisconnectRef.current = onDisconnect;
+  const onAccountSwitchRef = useRef(onAccountSwitch);
+  onAccountSwitchRef.current = onAccountSwitch;
 
-  // Capture the wallet type in a ref so it's readable inside the effect without
-  // being listed as a dependency (avoids restarting the interval on re-renders).
   const walletTypeRef = useRef(wallet?.walletType ?? null);
-  if (wallet?.walletType) {
-    walletTypeRef.current = wallet.walletType;
-  }
+  const walletAddressRef = useRef(wallet?.address ?? "");
+  if (wallet?.walletType) walletTypeRef.current = wallet.walletType;
+  if (wallet?.address) walletAddressRef.current = wallet.address;
 
   const isActive = !!wallet;
 
+  // ── Disconnection polling ──────────────────────────────────────────────────
   useEffect(() => {
     if (!isActive || !walletTypeRef.current) return;
     const walletType = walletTypeRef.current;
@@ -53,7 +61,7 @@ export function useWalletMonitor({
           onDisconnectRef.current();
         }
       } catch {
-        // Extension unreachable or threw — don't treat as disconnect.
+        // Extension unreachable — don't treat as disconnect.
       }
     };
 
@@ -63,4 +71,29 @@ export function useWalletMonitor({
       clearInterval(id);
     };
   }, [isActive]);
+
+  // ── Account-switch polling (Freighter only) ────────────────────────────────
+  useEffect(() => {
+    if (!isActive || walletTypeRef.current !== "freighter") return;
+    if (!walletAddressRef.current) return;
+
+    const stop = subscribeToAccountChanges(
+      walletAddressRef.current,
+      (newAddress) => {
+        if (newAddress === null) {
+          // Became null → treat as disconnect (handled by the other poller too,
+          // but handle here defensively so we don't leave a stale session).
+          clearWallet("freighter");
+          onDisconnectRef.current();
+        } else {
+          onAccountSwitchRef.current?.(newAddress);
+        }
+      }
+    );
+
+    return stop;
+  // Re-run only when the active wallet address actually changes so we poll
+  // against the correct baseline.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, wallet?.address]);
 }
