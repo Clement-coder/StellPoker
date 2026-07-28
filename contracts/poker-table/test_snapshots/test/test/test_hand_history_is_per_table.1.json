@@ -2039,6 +2039,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "last_raise_size"
+                    },
+                    "val": {
+                      "i128": "10"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "phase"
                     },
                     "val": {
@@ -2598,6 +2606,14 @@
                     },
                     "val": {
                       "u32": 0
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "last_raise_size"
+                    },
+                    "val": {
+                      "i128": "10"
                     }
                   },
                   {
