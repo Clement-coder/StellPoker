@@ -343,6 +343,7 @@ proptest! {
         commit_deal(&s, table_id, player_count);
         assert_invariants(&s, table_id, initial_total, rake_bps);
 
+        let mut seqs: std::vec::Vec<(Address, u32)> = std::vec![];
         let mut next_board_index = player_count * 2;
         for mv in &moves {
             let table = s.client.get_table(&table_id);
@@ -351,7 +352,24 @@ proptest! {
                     let seat = table.current_turn;
                     let player = players.get(seat as usize).unwrap();
                     let action = choose_action(&table, mv);
-                    s.client.player_action(&table_id, player, &action);
+                    let seq = {
+                        let mut found = false;
+                        let mut val = 0u32;
+                        for entry in seqs.iter_mut() {
+                            if entry.0 == *player {
+                                entry.1 += 1;
+                                val = entry.1;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            seqs.push((player.clone(), 1));
+                            val = 1;
+                        }
+                        val
+                    };
+                    s.client.player_action(&table_id, player, &seq, &action);
                     assert_invariants(&s, table_id, initial_total, rake_bps);
                 }
                 GamePhase::DealingFlop | GamePhase::DealingTurn | GamePhase::DealingRiver => {

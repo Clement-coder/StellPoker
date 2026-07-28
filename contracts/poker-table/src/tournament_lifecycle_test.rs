@@ -174,7 +174,23 @@ fn active_seats_t(table: &TableState) -> StdVec<u32> {
 /// Handles the all-in auto-advance: when all remaining players are all-in,
 /// `reset_round` skips betting phases automatically, so only `reveal_board`
 /// calls are needed for each street.
-fn drive_to_settlement(s: &TSetup, table_id: u32, winner_seat: u32) {
+fn get_seq(seqs: &mut StdVec<(Address, u32)>, player: &Address) -> u32 {
+    for entry in seqs.iter_mut() {
+        if entry.0 == *player {
+            entry.1 += 1;
+            return entry.1;
+        }
+    }
+    seqs.push((player.clone(), 1));
+    1
+}
+
+fn drive_to_settlement(
+    s: &TSetup,
+    table_id: u32,
+    winner_seat: u32,
+    seqs: &mut StdVec<(Address, u32)>,
+) {
     let mut next_card = 0u32;
     for _ in 0..20 {
         let table = s.client.get_table(&table_id);
@@ -214,8 +230,9 @@ fn drive_to_settlement(s: &TSetup, table_id: u32, winner_seat: u32) {
             GamePhase::Flop | GamePhase::Turn | GamePhase::River => {
                 let cur = table.current_turn;
                 let actor = table.players.get(cur).unwrap();
+                let seq = get_seq(seqs, &actor.address);
                 if !actor.all_in && !actor.folded {
-                    s.client.player_action(&table_id, &actor.address, &Action::Check);
+                    s.client.player_action(&table_id, &actor.address, &seq, &Action::Check);
                 }
             }
 
@@ -260,6 +277,7 @@ fn prize_for_place(total_chips: i128, place: usize) -> i128 {
 #[test]
 fn test_tournament_lifecycle_4_players() {
     let s = tourn_setup();
+    let mut seqs: StdVec<(Address, u32)> = StdVec::new();
 
     // -----------------------------------------------------------------------
     // Phase 1: Registration — 4 players join with equal buy-ins.
@@ -336,26 +354,26 @@ fn test_tournament_lifecycle_4_players() {
         // UTG = current_turn after commit_deal
         let p0_seat = table.current_turn; // seat 0
         let p0_addr = table.players.get(p0_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &p0_addr, &Action::AllIn);
+        s.client.player_action(&table_id, &p0_addr, &get_seq(&mut seqs, &p0_addr), &Action::AllIn);
 
         let table = s.client.get_table(&table_id);
         let p1_seat = table.current_turn; // seat 1
         let p1_addr = table.players.get(p1_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &p1_addr, &Action::AllIn);
+        s.client.player_action(&table_id, &p1_addr, &get_seq(&mut seqs, &p1_addr), &Action::AllIn);
 
         let table = s.client.get_table(&table_id);
         let p2_seat = table.current_turn; // seat 2 (SB)
         let p2_addr = table.players.get(p2_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &p2_addr, &Action::Fold);
+        s.client.player_action(&table_id, &p2_addr, &get_seq(&mut seqs, &p2_addr), &Action::Fold);
 
         let table = s.client.get_table(&table_id);
         let p3_seat = table.current_turn; // seat 3 (BB)
         let p3_addr = table.players.get(p3_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &p3_addr, &Action::Fold);
+        s.client.player_action(&table_id, &p3_addr, &get_seq(&mut seqs, &p3_addr), &Action::Fold);
 
         // P0 and P1 are all-in; the game advances through streets automatically.
         // Winner: P0 (seat index = p0_seat).
-        drive_to_settlement(&s, table_id, p0_seat);
+        drive_to_settlement(&s, table_id, p0_seat, &mut seqs);
 
         assert_chip_conservation(&s, table_id, prize_pool);
 
@@ -395,7 +413,12 @@ fn test_tournament_lifecycle_4_players() {
         // UTG (first to act preflop) goes all-in.
         let utg_seat = table.current_turn;
         let utg_addr = table.players.get(utg_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &utg_addr, &Action::AllIn);
+        s.client.player_action(
+            &table_id,
+            &utg_addr,
+            &get_seq(&mut seqs, &utg_addr),
+            &Action::AllIn,
+        );
 
         // Remaining active players fold one by one.
         loop {
@@ -411,14 +434,19 @@ fn test_tournament_lifecycle_4_players() {
             if actor.all_in {
                 break;
             }
-            s.client.player_action(&table_id, &actor.address, &Action::Fold);
+            s.client.player_action(
+                &table_id,
+                &actor.address,
+                &get_seq(&mut seqs, &actor.address),
+                &Action::Fold,
+            );
         }
 
         let table = s.client.get_table(&table_id);
         // If still in Showdown (all-in vs caller), drive to settlement.
         // If already in Settlement (fold-win), just continue.
         if table.phase == GamePhase::Showdown {
-            drive_to_settlement(&s, table_id, utg_seat);
+            drive_to_settlement(&s, table_id, utg_seat, &mut seqs);
         }
 
         assert_chip_conservation(&s, table_id, prize_pool);
@@ -443,7 +471,12 @@ fn test_tournament_lifecycle_4_players() {
         // First active player (UTG) goes all-in.
         let utg_seat = table.current_turn;
         let utg_addr = table.players.get(utg_seat).unwrap().address.clone();
-        s.client.player_action(&table_id, &utg_addr, &Action::AllIn);
+        s.client.player_action(
+            &table_id,
+            &utg_addr,
+            &get_seq(&mut seqs, &utg_addr),
+            &Action::AllIn,
+        );
 
         // Track who called (they are the second all-in competitor).
         let mut caller_seat: u32 = 0;
@@ -465,15 +498,25 @@ fn test_tournament_lifecycle_4_players() {
             if caller_addr.is_none() {
                 caller_seat = cur;
                 caller_addr = Some(actor.address.clone());
-                s.client.player_action(&table_id, &actor.address, &Action::Call);
+                s.client.player_action(
+                    &table_id,
+                    &actor.address,
+                    &get_seq(&mut seqs, &actor.address),
+                    &Action::Call,
+                );
             } else {
                 folded_count += 1;
-                s.client.player_action(&table_id, &actor.address, &Action::Fold);
+                s.client.player_action(
+                    &table_id,
+                    &actor.address,
+                    &get_seq(&mut seqs, &actor.address),
+                    &Action::Fold,
+                );
             }
         }
 
         // Drive streets to settlement. UTG (first to push) wins.
-        drive_to_settlement(&s, table_id, utg_seat);
+        drive_to_settlement(&s, table_id, utg_seat, &mut seqs);
 
         assert_chip_conservation(&s, table_id, prize_pool);
 
@@ -513,19 +556,29 @@ fn test_tournament_lifecycle_4_players() {
         let first_addr = table.players.get(first_seat).unwrap().address.clone();
 
         // First player goes all-in; second calls.
-        s.client.player_action(&table_id, &first_addr, &Action::AllIn);
+        s.client.player_action(
+            &table_id,
+            &first_addr,
+            &get_seq(&mut seqs, &first_addr),
+            &Action::AllIn,
+        );
 
         let table = s.client.get_table(&table_id);
         if matches!(table.phase, GamePhase::Preflop) {
             let cur = table.current_turn;
             let actor = table.players.get(cur).unwrap();
             if !actor.all_in && !actor.folded {
-                s.client.player_action(&table_id, &actor.address, &Action::Call);
+                s.client.player_action(
+                    &table_id,
+                    &actor.address,
+                    &get_seq(&mut seqs, &actor.address),
+                    &Action::Call,
+                );
             }
         }
 
         // First player wins every heads-up all-in.
-        drive_to_settlement(&s, table_id, first_seat);
+        drive_to_settlement(&s, table_id, first_seat, &mut seqs);
         assert_chip_conservation(&s, table_id, prize_pool);
 
         // Remove eliminated (0-stack) players.

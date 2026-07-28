@@ -8,6 +8,15 @@ use stellar_poker_lib::commitments;
 use stellar_poker_lib::merkle;
 use stellar_poker_lib::shuffle;
 
+/// Deck size (cards in deck, default 52 for standard poker)
+global DECK_SIZE: u32 = 52;
+
+/// Tree leaf count must be >= DECK_SIZE and power of 2
+/// For 52 cards: 64 leaves (6 levels)
+/// For 104 cards: 128 leaves (7 levels)
+global TREE_LEAVES: u32 = 64;
+global TREE_DEPTH: u32 = 6;
+
 /// Maximum cards that can be revealed at once (flop = 3)
 global MAX_REVEAL: u32 = 3;
 /// Maximum previously used indices (2 per player * 6 players + 4 board = 16)
@@ -42,11 +51,11 @@ fn main(
     );
 
     // 1. Recompute deck root and verify consistency with prior phases.
-    let mut leaves: [Field; 64] = [0; 64];
-    for i in 0..52 {
+    let mut leaves: [Field; TREE_LEAVES] = [0; TREE_LEAVES];
+    for i in 0..DECK_SIZE {
         leaves[i] = commitments::commit_card(deck[i], salts[i]);
     }
-    let computed_root = merkle::compute_merkle_root(leaves);
+    let computed_root = merkle::compute_merkle_root_generic(leaves);
     assert(computed_root == deck_root, "deck root mismatch");
 
     // 2. Mark all previously used deck indices.
