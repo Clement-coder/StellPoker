@@ -305,18 +305,18 @@ fn test_hand_ranking_pair_beats_high_card() {
 
 #[test]
 fn test_flush_beats_straight() {
-    // Flush (all hearts): 2♥, 3♥, 5♥, 7♥, 9♥, K♦, Q♠
+    // Flush (all hearts): 2h, 3h, 5h, 7h, 9h, Kd, Qs
     let flush = evaluate_hand_rank([13, 26, 32, 45, 48, 9, 22]);
-    // Straight (K-Q-J-10-9): K♠, Q♠, J♠, 10♣, 9♣, 2♥, 3♥
+    // Straight (K-Q-J-10-9): Ks, Qs, Js, 10c, 9c, 2h, 3h
     let straight = evaluate_hand_rank([11, 24, 37, 8, 21, 0, 1]);
     assert(flush > straight);
 }
 
 #[test]
 fn test_straight_beats_three_of_a_kind() {
-    // Straight (5-4-3-2-A wheel): A♠, K♦, Q♦, 5♣, 4♣, 3♥, 2♥
+    // Straight (5-4-3-2-A wheel): As, Kd, Qd, 5c, 4c, 3h, 2h
     let straight = evaluate_hand_rank([12, 10, 23, 30, 29, 15, 14]);
-    // Three of a kind (Kings): K♠, K♦, K♥, Q♠, J♠
+    // Three of a kind (Kings): Ks, Kd, Kh, Qs, Js
     let three_kind = evaluate_hand_rank([11, 24, 37, 9, 22, 0, 1]);
     assert(straight > three_kind);
 }
@@ -332,72 +332,72 @@ fn test_identical_hands() {
 #[test]
 fn test_high_card_kicker_tie_breaker() {
     // Pair of kings with different kickers
-    // K♠, K♦, A♠, Q♠, J♠
+    // Ks, Kd, As, Qs, Js
     let high_kicker = evaluate_hand_rank([11, 24, 12, 9, 22, 0, 1]);
-    // K♠, K♦, A♠, Q♠, 10♠
+    // Ks, Kd, As, Qs, 10s
     let low_kicker = evaluate_hand_rank([11, 24, 12, 9, 22, 7, 1]);
     assert(high_kicker > low_kicker);
 }
 
 #[test]
 fn test_two_pair_kicker_comparison() {
-    // Two pair (Aces and Kings) with Queen kicker: A♠, A♦, K♠, K♦, Q♠, J♠, 2♥
+    // Two pair (Aces and Kings) with Queen kicker: As, Ad, Ks, Kd, Qs, Js, 2h
     let two_pair_q = evaluate_hand_rank([12, 25, 11, 24, 9, 22, 14]);
-    // Two pair (Aces and Kings) with Jack kicker: A♠, A♦, K♠, K♦, J♠, 10♠, 2♥
+    // Two pair (Aces and Kings) with Jack kicker: As, Ad, Ks, Kd, Js, 10s, 2h
     let two_pair_j = evaluate_hand_rank([12, 25, 11, 24, 22, 8, 14]);
     assert(two_pair_q > two_pair_j);
 }
 
 #[test]
 fn test_full_house_ranking() {
-    // Full house (Aces full of Kings): A♠, A♦, A♥, K♠, K♦, Q♠, J♠
+    // Full house (Aces full of Kings): As, Ad, Ah, Ks, Kd, Qs, Js
     let full_house_aaa_kk = evaluate_hand_rank([12, 25, 38, 11, 24, 9, 22]);
-    // Full house (Kings full of Aces): K♠, K♦, K♥, A♠, A♦, Q♠, J♠
+    // Full house (Kings full of Aces): Ks, Kd, Kh, As, Ad, Qs, Js
     let full_house_kkk_aa = evaluate_hand_rank([11, 24, 37, 12, 25, 9, 22]);
     assert(full_house_aaa_kk > full_house_kkk_aa);
 }
 
 #[test]
 fn test_four_of_a_kind_beats_full_house() {
-    // Four of a kind (Aces): A♠, A♦, A♥, A♣, K♠, K♦, Q♠
+    // Four of a kind (Aces): As, Ad, Ah, Ac, Ks, Kd, Qs
     let four_kind = evaluate_hand_rank([12, 25, 38, 0, 11, 24, 9]);
-    // Full house (Kings full of Aces): K♠, K♦, K♥, A♠, A♦, Q♠, J♠
+    // Full house (Kings full of Aces): Ks, Kd, Kh, As, Ad, Qs, Js
     let full_house = evaluate_hand_rank([11, 24, 37, 12, 25, 9, 22]);
     assert(four_kind > full_house);
 }
 
 #[test]
 fn test_straight_flush_beats_four_of_a_kind() {
-    // Straight flush (9-8-7-6-5 all hearts): 9♥, 8♥, 7♥, 6♥, 5♥, K♠, Q♠
+    // Straight flush (9-8-7-6-5 all hearts): 9h, 8h, 7h, 6h, 5h, Ks, Qs
     let straight_flush = evaluate_hand_rank([48, 47, 46, 45, 44, 11, 24]);
-    // Four of a kind (Aces): A♠, A♦, A♥, A♣, K♠, K♦, Q♠
+    // Four of a kind (Aces): As, Ad, Ah, Ac, Ks, Kd, Qs
     let four_kind = evaluate_hand_rank([12, 25, 38, 0, 11, 24, 9]);
     assert(straight_flush > four_kind);
 }
 
 #[test]
 fn test_royal_flush_is_best() {
-    // Royal flush (A-K-Q-J-10 all spades): A♠, K♠, Q♠, J♠, 10♠, 2♥, 3♥
+    // Royal flush (A-K-Q-J-10 all spades): As, Ks, Qs, Js, 10s, 2h, 3h
     let royal = evaluate_hand_rank([12, 11, 10, 9, 8, 13, 26]);
-    // Straight flush (9-8-7-6-5): 9♠, 8♠, 7♠, 6♠, 5♠, K♥, Q♥
+    // Straight flush (9-8-7-6-5): 9s, 8s, 7s, 6s, 5s, Kh, Qh
     let straight_flush = evaluate_hand_rank([8, 7, 6, 5, 4, 37, 50]);
     assert(royal > straight_flush);
 }
 
 #[test]
 fn test_wheel_straight() {
-    // Wheel (A-2-3-4-5): A♠, K♦, Q♦, 5♣, 4♣, 3♥, 2♥
+    // Wheel (A-2-3-4-5): As, Kd, Qd, 5c, 4c, 3h, 2h
     let wheel = evaluate_hand_rank([12, 10, 23, 30, 29, 15, 14]);
-    // Six-high (6-5-4-3-2): 6♠, 5♠, 4♠, 3♠, 2♠, K♥, Q♥
+    // Six-high (6-5-4-3-2): 6s, 5s, 4s, 3s, 2s, Kh, Qh
     let six_high = evaluate_hand_rank([5, 4, 3, 2, 1, 37, 50]);
     assert(wheel > six_high);
 }
 
 #[test]
 fn test_kicker_matters_in_flush() {
-    // Flush with ace high kicker: A♥, K♥, Q♥, J♥, 9♥, 2♠, 3♠
+    // Flush with ace high kicker: Ah, Kh, Qh, Jh, 9h, 2s, 3s
     let ace_flush = evaluate_hand_rank([12, 11, 10, 9, 7, 26, 39]);
-    // Flush with king high kicker: K♥, Q♥, J♥, 10♥, 8♥, 2♠, 3♠
+    // Flush with king high kicker: Kh, Qh, Jh, 10h, 8h, 2s, 3s
     let king_flush = evaluate_hand_rank([11, 10, 9, 8, 6, 26, 39]);
     assert(ace_flush > king_flush);
 }
@@ -411,9 +411,9 @@ fn test_all_unique_cards_validation() {
 #[test]
 fn test_five_card_vs_seven_card_evaluation() {
     // The evaluate_hand_rank function should return the best 5-card hand
-    // Seven cards: A♠, K♠, Q♠, J♠, 10♠, 9♠, 2♥ (royal flush + extra)
+    // Seven cards: As, Ks, Qs, Js, 10s, 9s, 2h (royal flush + extra)
     let seven_card_hand = evaluate_hand_rank([12, 11, 10, 9, 8, 7, 14]);
-    // Five cards: A♠, K♠, Q♠, J♠, 10♠ (royal flush)
+    // Five cards: As, Ks, Qs, Js, 10s (royal flush)
     let five_card_hand = evaluate_hand_rank([12, 11, 10, 9, 8, 0, 1]);
     // Both should have same best hand score (royal flush)
     assert(seven_card_hand == five_card_hand);
@@ -448,5 +448,259 @@ fn test_is_wild_card_standard() {
     assert(!is_wild_card(0));
     assert(!is_wild_card(25));
     assert(!is_wild_card(51));
+}
+
+#[test]
+fn test_high_card_category() {
+    // 7s, 9d, Jh, Qc, Ks, 2h, 4c - no pairs, no flush, no straight
+    let score = evaluate_hand_rank([5, 21, 35, 9, 11, 14, 28]);
+    let category = score >> 20;
+    assert(category == 0);
+}
+
+#[test]
+fn test_one_pair_category() {
+    // Pair of 2s: 2c, 2d, 5h, 7s, 9c, Jd, Ks
+    let score = evaluate_hand_rank([0, 13, 18, 33, 7, 22, 11]);
+    let category = score >> 20;
+    assert(category == 1);
+}
+
+#[test]
+fn test_two_pair_category() {
+    // Two pair: As, Ad, Kh, Kc, Qs, Jd, 2h
+    let score = evaluate_hand_rank([12, 25, 11, 24, 9, 22, 14]);
+    let category = score >> 20;
+    assert(category == 2);
+}
+
+#[test]
+fn test_three_of_a_kind_category() {
+    // Trips: Ks, Kd, Kh, Qc, Js, 2d, 3h
+    let score = evaluate_hand_rank([11, 24, 37, 9, 22, 14, 15]);
+    let category = score >> 20;
+    assert(category == 3);
+}
+
+#[test]
+fn test_straight_category() {
+    // Straight 10-J-Q-K-A (ace-high): 10c, Jd, Qh, Ks, Ac, 2d, 3h
+    let score = evaluate_hand_rank([8, 22, 9, 11, 12, 14, 15]);
+    let category = score >> 20;
+    assert(category == 4);
+}
+
+#[test]
+fn test_flush_category() {
+    // Flush: all hearts - 2h, 5h, 8h, Jh, Kh, 3c, 7s
+    let score = evaluate_hand_rank([14, 18, 46, 35, 37, 15, 33]);
+    let category = score >> 20;
+    assert(category == 5);
+}
+
+#[test]
+fn test_full_house_category() {
+    // Full house: Ks, Kd, Kh, Qc, Qs, 2d, 3h
+    let score = evaluate_hand_rank([11, 24, 37, 9, 22, 14, 15]);
+    let category = score >> 20;
+    assert(category == 6);
+}
+
+#[test]
+fn test_four_of_a_kind_category() {
+    // Quads: Ks, Kd, Kh, Kc, Qs, 2d, 3h
+    let score = evaluate_hand_rank([11, 24, 37, 0, 9, 14, 15]);
+    let category = score >> 20;
+    assert(category == 7);
+}
+
+#[test]
+fn test_straight_flush_category() {
+    // Straight flush 5-6-7-8-9 all hearts: 5h, 6h, 7h, 8h, 9h, 2c, 3s
+    let score = evaluate_hand_rank([18, 19, 20, 46, 47, 14, 15]);
+    let category = score >> 20;
+    assert(category == 8);
+}
+
+#[test]
+fn test_royal_flush_category() {
+    // Royal flush: As, Ks, Qs, Js, 10s, 2h, 3h
+    let score = evaluate_hand_rank([12, 11, 10, 9, 8, 13, 26]);
+    let category = score >> 20;
+    assert(category == 9);
+}
+
+#[test]
+fn test_straight_flush_beats_four_of_a_kind_explicit() {
+    let sf = evaluate_hand_rank([48, 47, 46, 45, 44, 11, 24]);
+    let quads = evaluate_hand_rank([12, 25, 38, 0, 11, 24, 9]);
+    assert(sf >> 20 == 8);
+    assert(quads >> 20 == 7);
+    assert(sf > quads);
+}
+
+#[test]
+fn test_four_of_a_kind_beats_full_house_explicit() {
+    let quads = evaluate_hand_rank([12, 25, 38, 0, 11, 24, 9]);
+    let fh = evaluate_hand_rank([11, 24, 37, 12, 25, 9, 22]);
+    assert(quads >> 20 == 7);
+    assert(fh >> 20 == 6);
+    assert(quads > fh);
+}
+
+#[test]
+fn test_full_house_beats_flush_explicit() {
+    let fh = evaluate_hand_rank([11, 24, 37, 12, 25, 9, 22]);
+    let flush = evaluate_hand_rank([13, 26, 32, 45, 48, 9, 22]);
+    assert(fh >> 20 == 6);
+    assert(flush >> 20 == 5);
+    assert(fh > flush);
+}
+
+#[test]
+fn test_flush_beats_straight_explicit() {
+    let flush = evaluate_hand_rank([13, 26, 32, 45, 48, 9, 22]);
+    let straight = evaluate_hand_rank([11, 24, 37, 8, 21, 0, 1]);
+    assert(flush >> 20 == 5);
+    assert(straight >> 20 == 4);
+    assert(flush > straight);
+}
+
+#[test]
+fn test_straight_beats_three_of_a_kind_explicit() {
+    let straight = evaluate_hand_rank([12, 10, 23, 30, 29, 15, 14]);
+    let trips = evaluate_hand_rank([11, 24, 37, 9, 22, 0, 1]);
+    assert(straight >> 20 == 4);
+    assert(trips >> 20 == 3);
+    assert(straight > trips);
+}
+
+#[test]
+fn test_three_of_a_kind_beats_two_pair_explicit() {
+    let trips = evaluate_hand_rank([11, 24, 37, 9, 22, 0, 1]);
+    let two_pair = evaluate_hand_rank([12, 25, 11, 24, 9, 22, 14]);
+    assert(trips >> 20 == 3);
+    assert(two_pair >> 20 == 2);
+    assert(trips > two_pair);
+}
+
+#[test]
+fn test_two_pair_beats_one_pair_explicit() {
+    let two_pair = evaluate_hand_rank([12, 25, 11, 24, 9, 22, 14]);
+    let one_pair = evaluate_hand_rank([12, 25, 0, 1, 3, 5, 7]);
+    assert(two_pair >> 20 == 2);
+    assert(one_pair >> 20 == 1);
+    assert(two_pair > one_pair);
+}
+
+#[test]
+fn test_one_pair_beats_high_card_explicit() {
+    let one_pair = evaluate_hand_rank([12, 25, 0, 1, 3, 5, 7]);
+    let high_card = evaluate_hand_rank([5, 21, 35, 9, 11, 14, 28]);
+    assert(one_pair >> 20 == 1);
+    assert(high_card >> 20 == 0);
+    assert(one_pair > high_card);
+}
+
+#[test]
+fn test_higher_pair_wins() {
+    // Pair of aces: As, Ad, 2h, 3c, 5s, 7d, 9c
+    let pair_aces = evaluate_hand_rank([12, 25, 14, 15, 18, 33, 7]);
+    // Pair of kings: Ks, Kd, 2h, 3c, 5s, 7d, 9c
+    let pair_kings = evaluate_hand_rank([11, 24, 14, 15, 18, 33, 7]);
+    assert(pair_aces > pair_kings);
+}
+
+#[test]
+fn test_ace_high_straight_beats_king_high_straight() {
+    // Ace-high straight: 10-J-Q-K-A (mixed suits)
+    let ace_high = evaluate_hand_rank([8, 22, 9, 11, 12, 0, 1]);
+    // King-high straight: 9-10-J-Q-K (mixed suits)
+    let king_high = evaluate_hand_rank([7, 8, 22, 9, 11, 0, 1]);
+    assert(ace_high > king_high);
+}
+
+#[test]
+fn test_wheel_straight_category() {
+    // Wheel: A-2-3-4-5 (mixed suits, no flush)
+    let wheel = evaluate_hand_rank([12, 14, 15, 29, 30, 10, 23]);
+    let category = wheel >> 20;
+    assert(category == 4);
+}
+
+#[test]
+fn test_flush_high_card_tiebreak() {
+    // Flush A-K-Q-J-9 all hearts: Ah, Kh, Qh, Jh, 9h, 2s, 3s
+    let flush_ace = evaluate_hand_rank([12, 11, 10, 9, 7, 26, 39]);
+    // Flush K-Q-J-10-8 all hearts: Kh, Qh, Jh, 10h, 8h, 2s, 3s
+    let flush_king = evaluate_hand_rank([11, 10, 9, 8, 6, 26, 39]);
+    assert(flush_ace > flush_king);
+}
+
+#[test]
+fn test_different_suit_flush() {
+    // Flush in diamonds: 2d, 5d, 8d, Jd, Kd, 3c, 7s
+    let diamond_flush = evaluate_hand_rank([1, 17, 34, 22, 24, 15, 33]);
+    // Flush in spades: 2s, 5s, 8s, Js, Ks, 3c, 7d
+    let spade_flush = evaluate_hand_rank([12, 16, 29, 35, 37, 15, 17]);
+    // Both should be category 5 (flush)
+    assert(diamond_flush >> 20 == 5);
+    assert(spade_flush >> 20 == 5);
+}
+
+#[test]
+fn test_two_different_quads() {
+    // Quad aces: As, Ad, Ah, Ac, 2s, 3d, 5h
+    let quads_aces = evaluate_hand_rank([12, 25, 38, 0, 14, 15, 18]);
+    // Quad kings: Ks, Kd, Kh, Kc, 2s, 3d, 5h
+    let quads_kings = evaluate_hand_rank([11, 24, 37, 0, 14, 15, 18]);
+    assert(quads_aces > quads_kings);
+}
+
+#[test]
+fn test_flush_loses_to_full_house() {
+    // Full house: 5s, 5d, 5h, 3c, 3s, 2h, 7c
+    let fh = evaluate_hand_rank([4, 17, 30, 1, 14, 28, 33]);
+    // Flush: 2h, 4h, 6h, 8h, Kh, 3c, 7s
+    let flush = evaluate_hand_rank([14, 16, 18, 46, 37, 15, 33]);
+    assert(fh >> 20 == 6);
+    assert(flush >> 20 == 5);
+    assert(fh > flush);
+}
+
+#[test]
+fn test_three_of_a_kind_beats_high_pair() {
+    // Trip twos: 2c, 2d, 2h, 5s, 7c, 9d, Js
+    let trips = evaluate_hand_rank([0, 13, 26, 4, 33, 7, 22]);
+    // Pair of aces: As, Ad, 2c, 3d, 5h, 7c, 9s
+    let pair_aces = evaluate_hand_rank([12, 25, 0, 15, 18, 33, 7]);
+    assert(trips >> 20 == 3);
+    assert(pair_aces >> 20 == 1);
+    assert(trips > pair_aces);
+}
+
+#[test]
+fn test_hand_ordering_full_spectrum() {
+    // Verify the complete ordering: Royal > SF > 4K > FH > Flush > Straight > Trips > 2P > 1P > HC
+    let royal = evaluate_hand_rank([12, 11, 10, 9, 8, 13, 26]);
+    let sf = evaluate_hand_rank([48, 47, 46, 45, 44, 11, 24]);
+    let quads = evaluate_hand_rank([12, 25, 38, 0, 11, 24, 9]);
+    let fh = evaluate_hand_rank([11, 24, 37, 12, 25, 9, 22]);
+    let flush = evaluate_hand_rank([13, 26, 32, 45, 48, 9, 22]);
+    let straight = evaluate_hand_rank([11, 24, 37, 8, 21, 0, 1]);
+    let trips = evaluate_hand_rank([11, 24, 37, 9, 22, 0, 1]);
+    let two_pair = evaluate_hand_rank([12, 25, 11, 24, 9, 22, 14]);
+    let one_pair = evaluate_hand_rank([12, 25, 0, 1, 3, 5, 7]);
+    let high_card = evaluate_hand_rank([5, 21, 35, 9, 11, 14, 28]);
+
+    assert(royal > sf);
+    assert(sf > quads);
+    assert(quads > fh);
+    assert(fh > flush);
+    assert(flush > straight);
+    assert(straight > trips);
+    assert(trips > two_pair);
+    assert(two_pair > one_pair);
+    assert(one_pair > high_card);
 }
 

@@ -115,6 +115,71 @@ services:
       start_period: 60s
     <<: *json-logging
 
+  # Standby MPC nodes (Issue #95 — 5-node committee, N=5 / threshold=3).
+  #
+  # co-noir's REP3 protocol is fixed at exactly 3 active parties per session
+  # (see infrastructure/helm/mpc-node/values.yaml) — that "3" doesn't change.
+  # What "N=5, threshold=3" adds is redundancy: 2 extra pre-provisioned nodes
+  # that hold the *same* identity/config as an existing role (0 or 1) and can
+  # be promoted to take that role's place if its primary container fails,
+  # without a re-key ceremony. They are not started by default (`standby`
+  # profile) — bring one up with `scripts/promote-mpc-standby.sh <role>`,
+  # which stops the failed primary and starts its standby in its place.
+  # See docs/mpc-committee-resilience.md.
+  mpc-node-3:
+    profiles: ["standby"]
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "0" # standby for role 0 — same identity as mpc-node-0
+      PORT: "8104"
+      MPC_PORT: "10000"
+      PARTY_CONFIG: "/app/config/party_0.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+      REQUEST_LOG_FORMAT: "json"
+    ports:
+      - "8104:8104"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8104/health || (echo 'WARN: mpc-node-3 (standby for role 0) health check failed' >&2; exit 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    <<: *json-logging
+
+  mpc-node-4:
+    profiles: ["standby"]
+    build:
+      context: .
+      dockerfile: services/node/Dockerfile
+    environment:
+      NODE_ID: "1" # standby for role 1 — same identity as mpc-node-1
+      PORT: "8105"
+      MPC_PORT: "10001"
+      PARTY_CONFIG: "/app/config/party_1.toml"
+      CIRCUIT_DIR: "/app/circuits"
+      CRS_DIR: "/app/crs"
+      REQUEST_LOG_FORMAT: "json"
+    ports:
+      - "8105:8105"
+    volumes:
+      - ./crs:/app/crs
+      - ./circuits:/app/circuits:ro
+      - ./services/node/config:/app/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8105/health || (echo 'WARN: mpc-node-4 (standby for role 1) health check failed' >&2; exit 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 60s
+    <<: *json-logging
+
   # Coordinator (orchestrates MPC + serves API to web app)
   coordinator:
     build:

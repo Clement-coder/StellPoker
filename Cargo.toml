@@ -5,6 +5,7 @@ members = [
     "contracts/zk-verifier",
     "contracts/committee-registry",
     "contracts/game-hub",
+    "contracts/player-rating",
     "stellar-zk-cards",
     "services/coordinator",
     "services/node",

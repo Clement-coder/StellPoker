@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { GamePhase } from "@/lib/game-state";
 import { PixelChip } from "./PixelChip";
+import { ChipTray } from "./ChipTray";
 
 interface ActionPanelProps {
   phase: GamePhase;
@@ -10,6 +11,7 @@ interface ActionPanelProps {
   currentBet: number;
   myBet: number;
   myStack: number;
+  pot?: number;
   onAction: (action: string, amount?: number) => void;
   onChainConfirmed?: boolean;
   canStartHand?: boolean;
@@ -27,6 +29,7 @@ export function ActionPanel({
   currentBet,
   myBet,
   myStack,
+  pot = 0,
   onAction,
   onChainConfirmed,
   canStartHand = true,
@@ -41,6 +44,10 @@ export function ActionPanel({
   const callAmount = Math.max(currentBet - myBet, 0);
   const minBet = Math.max(currentBet * 2, 1);
   const maxBet = myStack;
+  const potOddsRatio = callAmount > 0 ? `${callAmount}:${pot}` : null;
+  const potOddsPercent = callAmount > 0 && pot > 0
+    ? `${((callAmount / (pot + callAmount)) * 100).toFixed(1)}%`
+    : null;
 
   if (phase === "waiting") {
     return (
@@ -142,21 +149,28 @@ export function ActionPanel({
         </button>
 
         {/* CHECK / CALL */}
-        <button
-          onClick={() => onAction(callAmount === 0 ? "check" : "call", callAmount)}
-          disabled={disabled}
-          className="pixel-btn text-[10px] has-tooltip"
-          style={{
-            padding: "6px 14px",
-            background: !disabled ? "#1a5276" : "#4a4a4a",
-            opacity: !disabled ? 1 : 0.5,
-            color: "white",
-            textShadow: "1px 1px 0 rgba(0,0,0,0.6)",
-          }}
-        >
-          {callAmount === 0 ? "CHECK" : `CALL ${callAmount}`}
-          <span className="tooltip">Shortcut: {callAmount === 0 ? "C" : "B"}</span>
-        </button>
+        <div className="flex flex-col items-center">
+          <button
+            onClick={() => onAction(callAmount === 0 ? "check" : "call", callAmount)}
+            disabled={disabled}
+            className="pixel-btn text-[10px] has-tooltip"
+            style={{
+              padding: "6px 14px",
+              background: !disabled ? "#1a5276" : "#4a4a4a",
+              opacity: !disabled ? 1 : 0.5,
+              color: "white",
+              textShadow: "1px 1px 0 rgba(0,0,0,0.6)",
+            }}
+          >
+            {callAmount === 0 ? "CHECK" : `CALL ${callAmount}`}
+            <span className="tooltip">Shortcut: {callAmount === 0 ? "C" : "B"}</span>
+          </button>
+          {potOddsRatio && potOddsPercent && (
+            <span className="text-[7px] mt-1" style={{ color: "#f1c40f" }}>
+              POT ODDS: {potOddsRatio} ({potOddsPercent})
+            </span>
+          )}
+        </div>
 
         {/* BET / RAISE */}
         <button
@@ -229,6 +243,18 @@ export function ActionPanel({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Chip tray for drag-and-drop betting */}
+      {!disabled && myStack > callAmount && (
+        <div className="w-full max-w-sm">
+          <ChipTray
+            myStack={myStack}
+            betAmount={betAmount}
+            setBetAmount={setBetAmount}
+            disabled={disabled}
+          />
         </div>
       )}
 

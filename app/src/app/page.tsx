@@ -7,6 +7,7 @@ import { PixelWorld } from "@/components/PixelWorld";
 import { PixelCat } from "@/components/PixelCat";
 import { PixelChip } from "@/components/PixelChip";
 import { TransactionSimulation } from "@/components/TransactionSimulation";
+import { TokenSelector } from "@/components/TokenSelector";
 import * as api from "@/lib/api";
 import { useJoinTableSimulation } from "@/lib/use-transaction-simulation";
 import {
@@ -18,6 +19,11 @@ import {
   type WalletType,
 } from "@/lib/wallet";
 import { useWalletMonitor } from "@/lib/use-wallet-monitor";
+import {
+  loadOpenTables,
+  tableHref,
+  type OpenTable,
+} from "@/lib/open-tables";
 
 type Screen = "splash" | "connect" | "menu" | "create" | "join";
 const STROOPS_PER_XLM = BigInt("10000000");
@@ -52,12 +58,14 @@ export default function Home() {
   const [availableWallets, setAvailableWallets] = useState<{ type: WalletType; name: string; isInstalled: boolean }[]>([]);
   const [busy, setBusy] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(2);
+  const [tokenChoice, setTokenChoice] = useState<{ type: string; sacAddress?: string }>({ type: "XLM" });
   const [buyInXlm, setBuyInXlm] = useState(
     formatStroopsToXlm(BigInt("1000000000"))
   );
   const [joinTableId, setJoinTableId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingTableId, setPendingTableId] = useState<number | null>(null);
+  const [openTables, setOpenTables] = useState<OpenTable[]>([]);
 
   const joinTableSim = useJoinTableSimulation(wallet, () => {
     if (pendingTableId) {
@@ -86,6 +94,12 @@ export default function Home() {
       setAvailableWallets(detectInstalledWallets());
     }
   }, [screen]);
+
+  // Tables this wallet already has open, so a multi-tabling player can drop
+  // straight back into one instead of retyping its ID (#72).
+  useEffect(() => {
+    setOpenTables(wallet ? loadOpenTables(wallet.address) : []);
+  }, [wallet, screen]);
 
   // Auto-advance from connect → menu when wallet connects
   useEffect(() => {
@@ -135,7 +149,8 @@ export default function Home() {
         wallet,
         players,
         solo,
-        buyIn ? buyIn.toString() : undefined
+        buyIn ? buyIn.toString() : undefined,
+        tokenChoice.type === "XLM" ? "XLM" : tokenChoice.sacAddress
       );
 
       if (!solo && buyIn) {
@@ -345,10 +360,15 @@ export default function Home() {
             fontFamily: "'Press Start 2P', monospace",
           }}
         >
-          ←
         </button>
 
-{/* Wallet indicator moved below main panel — see after screen content */}
+        {/* Admin Dashboard Navigation link (#29) */}
+        <Link
+          href="/admin"
+          className="absolute top-6 right-6 z-20 text-[10px] px-3 py-2 border border-[#8b6914] bg-[#1a120c] text-[#f1c40f] hover:bg-[#8b6914] hover:text-white transition"
+        >
+          🛡️ ADMIN
+        </Link>
 
         {/* Logo area */}
         <div className="text-center">
@@ -543,17 +563,22 @@ export default function Home() {
 
             <div className="w-full flex flex-col gap-2">
               <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
-                BUY-IN (XLM)
+                BUY-IN
               </div>
-              <input
-                type="text"
-                value={buyInXlm}
-                onChange={(e) => setBuyInXlm(e.target.value)}
-                placeholder="100"
-                disabled={busy}
-                className="w-full text-center text-[12px]"
-                style={{ padding: "8px 10px" }}
-              />
+
+              <div className="flex items-center gap-3">
+                <TokenSelector value={{ type: tokenChoice.type }} onChange={(v) => setTokenChoice({ type: v.type, sacAddress: v.sacAddress })} />
+                <input
+                  type="text"
+                  value={buyInXlm}
+                  onChange={(e) => setBuyInXlm(e.target.value)}
+                  placeholder="100"
+                  disabled={busy}
+                  className="w-full text-center text-[12px]"
+                  style={{ padding: "8px 10px" }}
+                />
+              </div>
+
               <div className="text-[9px]" style={{ color: "#95a5a6" }}>
                 Multiplayer only.
               </div>
@@ -594,6 +619,35 @@ export default function Home() {
             >
               JOIN TABLE
             </h2>
+
+            {/* Tables already open in this browser */}
+            {openTables.length > 0 && (
+              <div className="w-full flex flex-col gap-2">
+                <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
+                  YOUR TABLES
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {openTables.map((table) => (
+                    <Link
+                      key={table.tableId}
+                      href={tableHref(table)}
+                      className="pixel-border-thin px-3 py-2 text-[10px]"
+                      style={{
+                        background: "rgba(20, 90, 50, 0.35)",
+                        borderColor: "#27ae60",
+                        color: "#eafaf1",
+                        textDecoration: "none",
+                      }}
+                    >
+                      #{table.tableId}
+                    </Link>
+                  ))}
+                </div>
+                <div className="text-[9px]" style={{ color: "#95a5a6" }}>
+                  You can play several tables at once.
+                </div>
+              </div>
+            )}
 
             {/* Join by ID */}
             <div className="flex items-center gap-2 w-full">

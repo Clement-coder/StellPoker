@@ -1,6 +1,24 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Per-node MPC phase progress for a specific table, returned by
+/// `GET /api/table/:table_id/mpc-status` and included in WebSocket pushes.
+#[derive(Serialize, Clone, ToSchema)]
+pub struct MpcNodeProgress {
+    pub endpoint: String,
+    pub phase: String,
+    pub healthy: bool,
+    pub elapsed_secs: u64,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TableMpcStatusResponse {
+    pub table_id: u32,
+    pub phase: String,
+    pub nodes: Vec<MpcNodeProgress>,
+    pub active_sessions: usize,
+}
+
 /// Request body for `POST /api/flags/:key`.
 #[derive(Deserialize, ToSchema)]
 pub struct SetFlagBody {
@@ -133,6 +151,22 @@ pub struct OpenTableInfo {
     pub max_players: u32,
     pub joined_wallets: usize,
     pub open_wallet_slots: usize,
+}
+
+/// Multi-table overview entry for the mini-map (Issue #53).
+#[derive(Serialize, ToSchema, Clone)]
+pub struct TableOverviewInfo {
+    pub table_id: u32,
+    pub phase: String,
+    pub max_players: u32,
+    pub seated: usize,
+    pub total_chips: i64,
+    pub stacks: Vec<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TableOverviewResponse {
+    pub tables: Vec<TableOverviewInfo>,
 }
 
 #[derive(Serialize, ToSchema)]

@@ -144,6 +144,7 @@ pub fn build_server_config(cfg: NodeTlsConfig) -> Result<Arc<rustls::ServerConfi
 
 /// A `ClientCertVerifier` that accepts a client certificate only if its SPKI
 /// hash (or full DER) matches the pinned value.
+#[derive(Debug)]
 struct PinnedClientCertVerifier {
     pinned_spki_hash: Option<[u8; 32]>,
     pinned_cert_der: Option<Vec<u8>>,
@@ -317,6 +318,7 @@ pub fn spki_hash_hex(cert_der: &[u8]) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustls::server::danger::ClientCertVerifier;
 
     // Minimal self-signed certificate DER used in tests (pre-generated,
     // 256-byte EC key, CN=test, valid for 10 years).

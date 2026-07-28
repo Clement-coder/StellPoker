@@ -176,6 +176,43 @@ export interface OpenTablesResponse {
   tables: OpenTableInfo[];
 }
 
+/** Multi-table overview for mini-map (Issue #53). */
+export interface TableOverviewInfo {
+  table_id: number;
+  phase: string;
+  max_players: number;
+  seated: number;
+  total_chips: number;
+  stacks: number[];
+}
+
+export interface TableOverviewResponse {
+  tables: TableOverviewInfo[];
+}
+
+/** Per-player HUD stats for seat tooltip (Issue #55). */
+export interface PlayerHudStats {
+  address: string;
+  hands_played: number;
+  vpip: number;
+  pfr: number;
+  aggression_factor: number;
+}
+
+/** On-chain ELO rating entry (Issue #70). */
+export interface RatingEntry {
+  address: string;
+  rating: number;
+  hands_played: number;
+  hands_won: number;
+}
+
+export interface RatingLeaderboardResponse {
+  entries: RatingEntry[];
+  min_hands: number;
+  total: number;
+}
+
 export interface LobbySeat {
   seat_index: number;
   chain_address: string;
@@ -316,18 +353,23 @@ export async function createTable(
   auth: AuthSigner,
   maxPlayers: number,
   solo = false,
-  buyIn?: string
+  buyIn?: string,
+  token?: string | undefined
 ): Promise<CreateTableResponse> {
   const payload: {
     max_players: number;
     solo: boolean;
     buy_in?: string;
+    token?: string | null;
   } = {
     max_players: maxPlayers,
     solo,
   };
   if (buyIn) {
     payload.buy_in = buyIn;
+  }
+  if (token) {
+    payload.token = token;
   }
 
   const res = await authedFetch(
@@ -372,6 +414,44 @@ export async function listOpenTables(): Promise<OpenTablesResponse> {
   const res = await fetch(`${API_BASE}/api/tables/open`);
   if (!res.ok) {
     throw new Error(await readApiError(res, `Open tables failed: ${res.status}`));
+  }
+  return res.json();
+}
+
+/** Issue #53 — all known tables with seat counts and chip stacks. */
+export async function listTableOverview(): Promise<TableOverviewResponse> {
+  const res = await fetch(`${API_BASE}/api/tables/overview`);
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `Table overview failed: ${res.status}`));
+  }
+  return res.json();
+}
+
+/** Issue #55 — VPIP / PFR / AF / hands for seat hover tooltip. */
+export async function getPlayerHudStats(
+  address: string
+): Promise<PlayerHudStats> {
+  const res = await fetch(
+    `${API_BASE}/api/stats/player/${encodeURIComponent(address)}`
+  );
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `Player stats failed: ${res.status}`));
+  }
+  return res.json();
+}
+
+/** Issue #70 — on-chain ELO leaderboard (coordinator cache / contract read). */
+export async function getRatingLeaderboard(
+  offset = 0,
+  limit = 20
+): Promise<RatingLeaderboardResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/ratings/leaderboard?offset=${offset}&limit=${limit}`
+  );
+  if (!res.ok) {
+    throw new Error(
+      await readApiError(res, `Rating leaderboard failed: ${res.status}`)
+    );
   }
   return res.json();
 }
@@ -524,6 +604,32 @@ export interface StatsResponse {
 export async function getStats(): Promise<StatsResponse> {
   const res = await fetch(`${API_BASE}/api/stats`);
   if (!res.ok) throw new Error(`Failed to get stats: ${res.status}`);
+  return res.json();
+}
+
+// ── MPC Node Status ──────────────────────────────────────────────────────────
+
+export interface MpcNodeProgress {
+  endpoint: string;
+  phase: string;
+  healthy: boolean;
+  elapsed_secs: number;
+}
+
+export interface TableMpcStatusResponse {
+  table_id: number;
+  phase: string;
+  nodes: MpcNodeProgress[];
+  active_sessions: number;
+}
+
+export async function getMpcStatus(
+  tableId: number
+): Promise<TableMpcStatusResponse> {
+  const res = await fetch(`${API_BASE}/api/table/${tableId}/mpc-status`);
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `MPC status failed: ${res.status}`));
+  }
   return res.json();
 }
 

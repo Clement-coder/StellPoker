@@ -22,7 +22,9 @@ global DECK_SIZE: u32 = 52;
 global TREE_LEAVES: u32 = 64;
 global TREE_DEPTH: u32 = 6;
 
-/// Maximum players supported (for fixed circuit size)
+/// Maximum players supported (for fixed circuit size).
+/// Override at compile time via PLAYER_COUNT environment variable for
+/// per-table-size parameterisation (Issue #7).
 global MAX_PLAYERS: u32 = 6;
 
 fn main(

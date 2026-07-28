@@ -1,10 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Card } from "./Card";
 import { PixelCat, opponentSprite } from "./PixelCat";
-import { PixelChip } from "./PixelChip";
+import { PixelChip, AnimatedChipCounter } from "./PixelChip";
 import { Identicon } from "./Identicon";
 import type { Player } from "@/lib/game-state";
+import { classifyHandStrength } from "@/lib/hand-strength";
+import type { HandStrength } from "@/lib/hand-strength";
+import { getPlayerHudStats, type PlayerHudStats } from "@/lib/api";
+import { useT } from "@/lib/i18n/context";
 
 interface PlayerSeatProps {
   player: Player;
@@ -20,6 +25,22 @@ interface PlayerSeatProps {
   onEditAlias?: () => void;
   hideChipStats?: boolean;
   activeEmote?: string | null;
+  /** Board cards needed for hand strength evaluation. */
+  boardCards?: number[];
+  /** Current game phase to determine when to show hand strength. */
+  gamePhase?: string;
+  /** Disable HUD stats tooltip (e.g. storybook / bots). */
+  showStatsTooltip?: boolean;
+}
+
+function formatPct(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  return `${Math.round(n * 10) / 10}%`;
+}
+
+function formatAf(n: number): string {
+  if (!Number.isFinite(n)) return "—";
+  return (Math.round(n * 100) / 100).toFixed(2);
 }
 
 export function PlayerSeat({
@@ -34,20 +55,50 @@ export function PlayerSeat({
   onEditAlias,
   hideChipStats = false,
   activeEmote = null,
+  boardCards = [],
+  gamePhase = "",
+  showStatsTooltip = true,
 }: PlayerSeatProps) {
+  const t = useT();
+  const [hud, setHud] = useState<PlayerHudStats | null>(null);
+  const [hudLoaded, setHudLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!showStatsTooltip || isBot || !player.address) return;
+    let cancelled = false;
+    getPlayerHudStats(player.address)
+      .then((stats) => {
+        if (!cancelled) {
+          setHud(stats);
+          setHudLoaded(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHudLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [player.address, showStatsTooltip, isBot]);
+
   const sprite = isUser ? 18 : opponentSprite(player.seat);
   const cardSize = isUser ? "md" : "sm";
   const fallbackLabel = isUser
-    ? "— YOU —"
+    ? t("seat.you")
     : isBot
-      ? "— AI BOT —"
+      ? t("seat.aiBot")
       : `${player.address.slice(0, 4)}...${player.address.slice(-4)}`;
   const displayLabel =
     labelOverride ?? (alias ? (isUser ? `${alias} (YOU)` : alias) : fallbackLabel);
 
+  const showStrength = isUser && player.cards && boardCards.length >= 3 && ["flop", "turn", "river"].includes(gamePhase);
+  const handStrength: HandStrength | null = showStrength
+    ? classifyHandStrength(player.cards!, boardCards)
+    : null;
+
   return (
     <div
-      className="relative flex flex-col items-center gap-1"
+      className={`relative flex flex-col items-center gap-1${showStatsTooltip && !isBot ? " has-stats-tooltip" : ""}`}
       style={{
         opacity: player.folded ? 0.5 : 1,
         // Pulse glow on user's own seat when it's their turn (#47).
@@ -63,6 +114,36 @@ export function PlayerSeat({
         transition: "box-shadow 0.3s",
       }}
     >
+      {showStatsTooltip && !isBot && (
+        <div className="stats-tooltip" role="tooltip">
+          {!hudLoaded && (
+            <div style={{ color: "#7f8c8d" }}>{t("stats.loadingStats")}</div>
+          )}
+          {hudLoaded && hud && (
+            <>
+              <div className="stats-tooltip-row">
+                <span className="stats-tooltip-label">{t("stats.vpip")}</span>
+                <span className="stats-tooltip-value">{formatPct(hud.vpip)}</span>
+              </div>
+              <div className="stats-tooltip-row">
+                <span className="stats-tooltip-label">{t("stats.pfr")}</span>
+                <span className="stats-tooltip-value">{formatPct(hud.pfr)}</span>
+              </div>
+              <div className="stats-tooltip-row">
+                <span className="stats-tooltip-label">{t("stats.aggression")}</span>
+                <span className="stats-tooltip-value">{formatAf(hud.aggression_factor)}</span>
+              </div>
+              <div className="stats-tooltip-row">
+                <span className="stats-tooltip-label">{t("stats.hands")}</span>
+                <span className="stats-tooltip-value">{hud.hands_played}</span>
+              </div>
+            </>
+          )}
+          {hudLoaded && !hud && (
+            <div style={{ color: "#7f8c8d" }}>—</div>
+          )}
+        </div>
+      )}
       {activeEmote && (
         <div
           className="absolute z-50 bg-[#1a120c] border-2 border-[#8b6914] px-2 py-1 text-[16px] animate-float-up pointer-events-none text-center"
@@ -91,7 +172,7 @@ export function PlayerSeat({
           whiteSpace: 'nowrap',
           marginBottom: '2px',
         }}>
-          {isUser ? "▼ YOUR TURN ▼" : "▼ THEIR TURN ▼"}
+          {isUser ? t("seat.yourTurn") : t("seat.theirTurn")}
         </div>
       )}
 
@@ -103,7 +184,7 @@ export function PlayerSeat({
           textShadow: "1px 1px 0 rgba(0,0,0,0.6)",
           marginBottom: '2px',
         }}>
-          ★ WINNER ★
+          {t("seat.winner")}
         </div>
       )}
 
@@ -113,11 +194,11 @@ export function PlayerSeat({
         textShadow: '1px 1px 0 rgba(0,0,0,0.5)',
       }}>
         <span>{displayLabel}</span>
-        {isDealer && <span style={{ color: '#f1c40f' }}>[D]</span>}
+        {isDealer && <span style={{ color: '#f1c40f' }}>{t("seat.dealer")}</span>}
         {onEditAlias && (
           <button
             onClick={onEditAlias}
-            title="Change your alias"
+            title={t("seat.editAlias")}
             style={{
               background: 'none',
               border: 'none',
@@ -127,7 +208,7 @@ export function PlayerSeat({
               padding: 0,
             }}
           >
-            [EDIT]
+            {t("seat.edit")}
           </button>
         )}
       </div>
@@ -163,8 +244,8 @@ export function PlayerSeat({
       <div className="flex gap-1">
         {player.cards ? (
           <>
-            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} flip={isUser} />
-            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} flip={isUser} flipDelay={0.08} />
+            <Card value={player.cards[0]} size={cardSize} faceDown={!isUser} flip={isUser} strength={handStrength} />
+            <Card value={player.cards[1]} size={cardSize} faceDown={!isUser} flip={isUser} flipDelay={0.08} strength={handStrength} />
           </>
         ) : (
           <>
@@ -183,7 +264,7 @@ export function PlayerSeat({
               color: '#27ae60',
               textShadow: '1px 1px 0 rgba(0,0,0,0.4)',
             }}>
-              {player.stack.toLocaleString()} CHIPS
+              <AnimatedChipCounter value={player.stack} suffix={` ${t("seat.chips")}`} />
             </span>
           </div>
 
@@ -197,7 +278,7 @@ export function PlayerSeat({
             >
               <PixelChip color="gold" size={1} />
               <span className="text-[9px]" style={{ color: '#f1c40f' }}>
-                BET: {player.betThisRound.toLocaleString()}
+                {t("seat.bet")}: <AnimatedChipCounter value={player.betThisRound} />
               </span>
             </div>
           )}
@@ -206,14 +287,14 @@ export function PlayerSeat({
 
       {/* Status tags */}
       {player.folded && (
-        <div className="text-[9px]" style={{ color: '#e74c3c' }}>FOLDED</div>
+        <div className="text-[9px]" style={{ color: '#e74c3c' }}>{t("seat.folded")}</div>
       )}
       {player.allIn && (
         <div className="text-[9px]" style={{
           color: '#e67e22',
           animation: 'textPulse 0.8s ease-in-out infinite',
         }}>
-          ALL IN!
+          {t("seat.allIn")}
         </div>
       )}
     </div>

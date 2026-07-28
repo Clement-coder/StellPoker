@@ -2,6 +2,7 @@ use soroban_sdk::{Address, Env, Symbol};
 
 use crate::constant_time;
 use crate::game;
+use crate::history;
 use crate::types::*;
 
 /// Process a player's betting action.
@@ -39,6 +40,7 @@ pub fn process_action(
             // Check if only one player remains
             if game::active_player_count(table) == 1 {
                 emit_action(env, table, player, action, 0);
+                history::record_action(env, table, seat, action, 0);
                 game::settle_fold_win(env, table)?;
                 return Ok(());
             }
@@ -120,8 +122,11 @@ pub fn process_action(
     // Emit a per-action event so the frontend can react without polling. The
     // amount is the chips added to the pot by this action (0 for fold/check).
     emit_action(env, table, player, action, table.pot - pot_before);
+    history::record_action(env, table, seat, action, table.pot - pot_before);
 
     table.last_action_ledger = env.ledger().sequence();
+    // Reset action deadline for the next player
+    table.action_deadline = env.ledger().sequence() + table.config.timeout_ledgers;
 
     // Advance turn
     advance_turn(env, table)
@@ -246,6 +251,8 @@ fn advance_to_next_phase(env: &Env, table: &mut TableState) -> Result<(), PokerT
         _ => return Ok(()),
     };
     table.last_action_ledger = env.ledger().sequence();
+    // No action deadline during committee phases (Dealing/Reveal/Showdown)
+    table.action_deadline = 0;
 
     env.events().publish(
         (Symbol::new(env, "phase_change"), table.id),

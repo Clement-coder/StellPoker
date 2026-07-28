@@ -193,6 +193,7 @@ fn drive_to_settlement(s: &TSetup, table_id: u32, winner_seat: u32) {
                     ));
                 }
                 let pub_in = showdown_public_inputs_t(&s.env, &table, winner_seat);
+                let bad_beat: Vec<(u32, u32)> = Vec::new(&s.env);
                 s.client.submit_showdown(
                     &table_id,
                     &s.committee,
@@ -200,6 +201,7 @@ fn drive_to_settlement(s: &TSetup, table_id: u32, winner_seat: u32) {
                     &salts,
                     &Bytes::new(&s.env),
                     &pub_in,
+                    &bad_beat,
                 );
             }
 
@@ -276,6 +278,10 @@ fn test_tournament_lifecycle_4_players() {
         verifier: s.verifier.clone(),
         game_hub,
         rake_bps: 0,
+        max_rebuys: 0,
+        jackpot_rake_share_bps: 0,
+        min_bad_beat_category: 7,
+        min_bad_beat_rank: 12,
     };
     let table_id = s.client.create_table(&s.admin, &config);
 

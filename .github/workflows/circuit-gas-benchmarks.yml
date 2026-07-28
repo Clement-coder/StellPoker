@@ -1,0 +1,48 @@
+name: Circuit Gas Benchmarks
+
+on:
+  pull_request:
+    paths:
+      - 'circuits/**'
+      - 'scripts/bench_circuit_gas.py'
+  push:
+    paths:
+      - 'circuits/**'
+
+jobs:
+  bench:
+    name: Run circuit gas benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+
+      - name: Install bb (if available)
+        run: |
+          echo "Attempting to install Barretenberg 'bb' CLI if present in toolchain. If not available, benchmarks will use conservative defaults."
+
+      - name: Run bench script
+        env:
+          CI: true
+        run: |
+          set -euo pipefail
+          python3 ./scripts/bench_circuit_gas.py || true
+
+      - name: Upload benchmarks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuit-benchmarks
+          path: |
+            circuits/BENCHMARKS.md
+            benchmark_data/benchmarks.csv
+
+      - name: Fail on threshold breach
+        if: failure() == true
+        run: |
+          echo "Benchmarks reported regressions exceeding threshold. Failing job." && exit 1

@@ -83,16 +83,11 @@ export async function trySilentReconnect(): Promise<WalletSession | null> {
   return null;
 }
 
-export async function getActiveAddress(): Promise<string | null> {
-  return getActiveFreighterAddress();
-}
-
 export function getWalletDisplayName(session: WalletSession): string {
   const meta = WALLET_META[session.walletType];
   return meta ? meta.name : session.walletType;
 }
 
-/** Returns the currently active Freighter address, or null if locked/disconnected. */
 export async function getActiveAddress(): Promise<string | null> {
   return freighterGetActiveAddress();
 }

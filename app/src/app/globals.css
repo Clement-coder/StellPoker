@@ -2,6 +2,29 @@
 @import "tailwindcss";
 
 :root {
+ /* Light theme defaults */
+ --bg-top: var(--sky-top);
+ --bg-bottom: var(--sky-bottom);
+ --text-color: var(--pixel-cream);
+}
+
+:root[data-theme="dark"] {
+ --bg-top: #0a0a12;
+ --bg-bottom: #0d1220;
+ --text-color: #f5f5f5;
+ --pixel-cream: #f5f5f5;
+ --ui-border: #6b4f12;
+}
+
+:root[data-theme="light"] {
+ --bg-top: #87ceeb;
+ --bg-bottom: #cfefff;
+ --text-color: #222222;
+ --pixel-cream: #3d2400;
+ --ui-border: #8b6914;
+}
+
+:root {
   --sky-top: #4a90d9;
   --sky-bottom: #87ceeb;
   --grass-light: #5cb85c;
@@ -31,8 +54,8 @@
 }
 
 body {
-  background: var(--sky-top);
-  color: var(--pixel-cream);
+  background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  color: var(--text-color);
   font-family: 'Press Start 2P', monospace;
   overflow-x: hidden;
   min-height: 100vh;
@@ -372,6 +395,43 @@ input[type="text"]:focus {
   visibility: visible;
 }
 
+/* Multi-line player HUD stats tooltip (Issue #55) */
+.stats-tooltip {
+  visibility: hidden;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #0c0a18;
+  color: #f5e6c8;
+  text-align: left;
+  padding: 8px 10px;
+  border: 2px solid #8b6914;
+  font-size: 7px;
+  white-space: nowrap;
+  z-index: 120;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  margin-bottom: 6px;
+  min-width: 88px;
+  line-height: 1.6;
+  font-family: "Press Start 2P", monospace;
+}
+.has-stats-tooltip:hover .stats-tooltip {
+  visibility: visible;
+}
+.stats-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+.stats-tooltip-label {
+  color: #95a5a6;
+}
+.stats-tooltip-value {
+  color: #f1c40f;
+}
+
 /* Emote bubble floating animation */
 @keyframes floatUp {
   0% { transform: translateY(0) scale(0.8); opacity: 0; }
@@ -382,3 +442,26 @@ input[type="text"]:focus {
 .animate-float-up {
   animation: floatUp 3s ease-out forwards;
 }
+
+/* Responsive Card Sizing and Container Queries (#52) */
+@container (max-width: 640px) {
+  .card-responsive {
+    transform: scale(0.85);
+    transform-origin: center center;
+  }
+}
+@media (max-width: 640px) {
+  .card-responsive {
+    max-width: 100%;
+    transform: scale(0.85);
+    transform-origin: center center;
+  }
+}
+@media (max-width: 480px) {
+  .card-responsive {
+    max-width: 100%;
+    transform: scale(0.72);
+    transform-origin: center center;
+  }
+}
+

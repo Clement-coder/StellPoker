@@ -112,6 +112,10 @@ fn config(s: &Setup, player_count: u32, rake_bps: u32) -> TableConfig {
         verifier: s.verifier.clone(),
         game_hub,
         rake_bps,
+        max_rebuys: 0,
+        jackpot_rake_share_bps: 0,
+        min_bad_beat_category: 7,
+        min_bad_beat_rank: 12,
     }
 }
 
@@ -301,6 +305,7 @@ fn settle_showdown(s: &Setup, table_id: u32) {
             BytesN::from_array(&s.env, &[0u8; 32]),
         ));
     }
+    let bad_beat_scores: Vec<(u32, u32)> = Vec::new(&s.env);
     s.client.submit_showdown(
         &table_id,
         &s.committee,
@@ -308,6 +313,7 @@ fn settle_showdown(s: &Setup, table_id: u32) {
         &salts,
         &Bytes::new(&s.env),
         &public_inputs,
+        &bad_beat_scores,
     );
 }
 

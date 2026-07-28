@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, TableSession};
+use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -35,6 +35,18 @@ use session::{
 
 const MAX_PLAYERS: usize = 6;
 const MIN_PLAYERS: usize = 2;
+
+/// Derive the parameterised circuit name for a given base circuit and player
+/// count.  Returns e.g. `"deal_valid_2p"` for 2 players, falling back to the
+/// unparameterised `"deal_valid"` when the count equals MAX_PLAYERS or the
+/// parameterised variant is not expected to exist.
+fn parameterised_circuit_name(base: &str, player_count: usize) -> String {
+    if player_count >= MIN_PLAYERS && player_count < MAX_PLAYERS {
+        format!("{}_{}p", base, player_count)
+    } else {
+        base.to_string()
+    }
+}
 
 pub struct SessionGuard {
     counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -212,6 +224,8 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        mpc_node_progress: Vec::new(),
+        mpc_operation_started: None,
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -262,6 +276,77 @@ pub async fn list_open_tables(
     }
 
     Ok(Json(OpenTablesResponse { tables }))
+}
+
+/// GET /api/tables/overview
+///
+/// Multi-table overview for the mini-map (Issue #53): all known tables with
+/// seat counts and aggregate chip stacks.
+pub async fn list_table_overview(
+    State(state): State<AppState>,
+) -> Result<Json<crate::api::types::TableOverviewResponse>, StatusCode> {
+    use crate::api::types::{TableOverviewInfo, TableOverviewResponse};
+
+    if !state.soroban_config.is_configured() {
+        // Fall back to in-memory sessions when chain is not configured.
+        let tables_guard = state.tables.read().await;
+        let mut tables: Vec<TableOverviewInfo> = tables_guard
+            .keys()
+            .map(|table_id| TableOverviewInfo {
+                table_id: *table_id,
+                phase: "Unknown".to_string(),
+                max_players: 6,
+                seated: 0,
+                total_chips: 0,
+                stacks: Vec::new(),
+            })
+            .collect();
+        tables.sort_by_key(|t| t.table_id);
+        return Ok(Json(TableOverviewResponse { tables }));
+    }
+
+    let scan_max = std::env::var("OPEN_TABLE_SCAN_MAX")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(32);
+
+    // Also include live in-memory table ids beyond the scan window.
+    let session_ids: Vec<u32> = {
+        let guard = state.tables.read().await;
+        guard.keys().copied().collect()
+    };
+
+    let mut seen = std::collections::HashSet::new();
+    let mut tables = Vec::new();
+
+    let mut candidates: Vec<u32> = (0..scan_max).collect();
+    for id in session_ids {
+        if id >= scan_max {
+            candidates.push(id);
+        }
+    }
+    candidates.sort_unstable();
+    candidates.dedup();
+
+    for table_id in candidates {
+        if !seen.insert(table_id) {
+            continue;
+        }
+        let Ok(view) = fetch_onchain_table_view(&state.soroban_config, table_id).await else {
+            continue;
+        };
+        let total_chips: i64 = view.stacks.iter().sum();
+        tables.push(TableOverviewInfo {
+            table_id,
+            phase: view.phase,
+            max_players: view.max_players,
+            seated: view.seats.len(),
+            total_chips,
+            stacks: view.stacks,
+        });
+    }
+
+    Ok(Json(TableOverviewResponse { tables }))
 }
 
 /// POST /api/table/{table_id}/join
@@ -409,6 +494,8 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            mpc_node_progress: Vec::new(),
+            mpc_operation_started: None,
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -434,19 +521,28 @@ pub async fn request_deal(
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_deal.share_set_ids,
         &proof_session_id,
-        &req.circuit_name,
+        &deal_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
     .await
     .map_err(|e| {
         tracing::error!("Deal proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: a committee node that went down mid-session can't be
+        // recovered by retrying this same session (REP3 needs all 3 original
+        // share-holders) — signal the caller to start a fresh deal instead of
+        // a generic gateway error.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let parsed_deal =
@@ -622,7 +718,12 @@ pub async fn request_reveal(
     .await
     .map_err(|e| {
         tracing::error!("Reveal proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: see the deal-proof call site above.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let num_revealed = match phase.as_str() {
@@ -767,19 +868,26 @@ pub async fn request_showdown(
 
     let proof_session_id = next_proof_session_id(session, "showdown");
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
+    let showdown_circuit =
+        parameterised_circuit_name("showdown_valid", session.player_order.len());
     let showdown_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
         &prepared_showdown.share_set_ids,
         &proof_session_id,
-        "showdown_valid",
+        &showdown_circuit,
         &state.mpc_config.circuit_dir,
         &node_endpoints,
     )
     .await
     .map_err(|e| {
         tracing::error!("Showdown proof generation failed: {}", e);
-        StatusCode::BAD_GATEWAY
+        // Issue #96: see the deal-proof call site above.
+        if mpc::is_node_unavailable_error(&e) {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
     })?;
 
     let parsed_showdown =
@@ -973,6 +1081,25 @@ pub async fn player_action(
         Some(tx_hash)
     };
 
+    // Issue #55: track HUD stats (VPIP / PFR / AF) from live actions.
+    let is_preflop = {
+        let tables = state.tables.read().await;
+        tables
+            .get(&table_id)
+            .map(|s| {
+                let p = s.phase.to_ascii_lowercase();
+                p.contains("preflop") || p == "dealing" || p.is_empty()
+            })
+            .unwrap_or(true)
+    };
+    crate::stats::record_player_action(
+        &state.stats,
+        &player_address,
+        &normalized,
+        is_preflop,
+    )
+    .await;
+
     broadcast_table_state(&state, table_id).await;
 
     Ok(Json(PlayerActionResponse {
@@ -1147,6 +1274,35 @@ pub async fn get_table_state(
         })?;
 
     Ok(Json(TableStateResponse { state: result }))
+}
+
+/// GET /api/table/{table_id}/mpc-status
+///
+/// Returns per-node MPC phase progress for the table's current operation.
+/// The frontend polls this during deal/reveal/showdown to show a live
+/// indicator of which nodes have responded.
+pub async fn get_mpc_status(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+) -> Result<Json<types::TableMpcStatusResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+
+    let tables = state.tables.read().await;
+    let session = tables.get(&table_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let active_sessions = state.mpc_sessions.read().await.len();
+
+    Ok(Json(types::TableMpcStatusResponse {
+        table_id,
+        phase: session.phase.clone(),
+        nodes: session.mpc_node_progress.clone(),
+        active_sessions,
+    }))
 }
 
 /// GET /api/committee/status
