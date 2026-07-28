@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Shared query parameters for offset/limit paginated endpoints.
+#[derive(Deserialize, ToSchema)]
+pub struct PaginatedQuery {
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
 /// Per-node MPC phase progress for a specific table, returned by
 /// `GET /api/table/:table_id/mpc-status` and included in WebSocket pushes.
 #[derive(Serialize, Clone, ToSchema)]

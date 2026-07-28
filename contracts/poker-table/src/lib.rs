@@ -1159,6 +1159,56 @@ impl PokerTableContract {
         history::HAND_HISTORY_CAPACITY
     }
 
+    /// Offset-based paginated hand history (newest first). Each record read
+    /// has its TTL extended (bump-on-read pattern for pagination cursors).
+    ///
+    /// * `offset` — skip this many records from the newest (0 = start at newest).
+    /// * `limit` — max records to return (capped at the buffer capacity).
+    pub fn get_hand_history_chunk(
+        env: Env,
+        table_id: u32,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<HandRecord> {
+        history::get_history_chunk(&env, table_id, offset, limit)
+    }
+
+    // ========================================================================
+    // Paginated Player List (read-only)
+    // ========================================================================
+
+    /// Return the total number of seated players (useful for pagination UIs).
+    pub fn get_player_count(env: Env, table_id: u32) -> Result<u32, PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        Ok(table.players.len())
+    }
+
+    /// Return a slice of the table's players with offset/limit pagination.
+    /// Players are returned in seat order. The table entry's TTL is bumped
+    /// on every read.
+    pub fn get_players_paginated(
+        env: Env,
+        table_id: u32,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<PlayerState>, PokerTableError> {
+        let table = load_table(&env, table_id)?;
+        let total = table.players.len();
+        if offset >= total || limit == 0 {
+            return Ok(Vec::new(&env));
+        }
+        let end = core::cmp::min(offset.saturating_add(limit), total);
+        let mut out: Vec<PlayerState> = Vec::new(&env);
+        let mut i = offset;
+        while i < end {
+            if let Some(p) = table.players.get(i) {
+                out.push_back(p);
+            }
+            i += 1;
+        }
+        Ok(out)
+    }
+
     // ========================================================================
     // Admin Functions (Stellar Game Studio pattern)
     // ========================================================================
