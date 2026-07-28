@@ -729,6 +729,7 @@ async fn main() {
         state.committee_key_rotation.clone(),
         state.soroban_config.clone(),
     );
+    circuit_pins::spawn_circuit_watcher(state.mpc_config.circuit_dir.clone());
 
     if let Some(path) = hot_reload_snapshot {
         hot_reload::spawn_snapshot_task(path, Arc::clone(&tables), Arc::clone(&lobby_assignments));

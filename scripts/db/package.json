@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "generate-types": "tsx generate-types.ts",
+    "generate-er-diagram": "python3 generate_er_diagram.py",
     "migrate": "sqlx migrate run --source ../../services/coordinator/migrations",
     "migrate:revert": "sqlx migrate revert --source ../../services/coordinator/migrations",
     "migrate:info": "sqlx migrate info --source ../../services/coordinator/migrations",

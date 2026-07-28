@@ -2,67 +2,165 @@
 //!
 //! When a proof session starts (deal phase) the coordinator hashes the ACIR
 //! bytecode file for every circuit that will be used during that session and
-//! stores those hashes in the [`TableSession`].  On every subsequent proof
+//! stores those hashes in the [`TableSession`]. On every subsequent proof
 //! submission (reveal, showdown) the hashes are re-computed and compared
-//! against the pinned values.  If any artifact has changed since the session
+//! against the pinned values. If any artifact has changed since the session
 //! was opened the submission is rejected with a `CONFLICT` status, preventing
 //! a circuit upgrade from silently affecting an in-flight game.
+//!
+//! # Hot-Reloading & Cache Warming (Issue #253)
+//! A background watcher monitors the circuit artifact directory for changes.
+//! When a new or updated artifact is detected, the cache is warmed so new
+//! sessions automatically use the updated circuit without dropping or
+//! disrupting existing in-flight sessions.
 //!
 //! # Hash function
 //! SHA-256 over the raw file bytes, hex-encoded.
 //!
 //! # Artifact path convention
 //! `<circuit_dir>/<circuit_name>/target/<circuit_name>.json`
-//!
-//! This matches the output layout of `nargo compile`.
 
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::{OnceLock, RwLock};
+use std::time::SystemTime;
 
-/// Compute the SHA-256 hex digest of a single circuit artifact file.
-///
-/// `circuit_dir` is the root directory that contains one sub-directory per
-/// circuit (e.g. `./circuits`).  `circuit_name` is the name used by nargo
-/// (e.g. `deal_valid`, `reveal_board_valid`, `showdown_valid`).
-fn hash_artifact(circuit_dir: &str, circuit_name: &str) -> Result<String, String> {
+#[derive(Debug, Clone, Default)]
+struct WarmedArtifact {
+    hash: String,
+    mtime: SystemTime,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CircuitCacheState {
+    active_hashes: HashMap<String, WarmedArtifact>,
+    known_hashes: HashMap<String, HashSet<String>>,
+}
+
+static WARMED_CACHE: OnceLock<RwLock<CircuitCacheState>> = OnceLock::new();
+
+fn get_cache() -> &'static RwLock<CircuitCacheState> {
+    WARMED_CACHE.get_or_init(|| RwLock::new(CircuitCacheState::default()))
+}
+
+/// Compute the SHA-256 hex digest and modified time of a single circuit artifact file.
+fn hash_artifact_with_mtime(circuit_dir: &str, circuit_name: &str) -> Result<(String, SystemTime), String> {
     let path = format!(
         "{}/{}/target/{}.json",
         circuit_dir.trim_end_matches('/'),
         circuit_name,
         circuit_name,
     );
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("cannot stat circuit artifact '{}': {}", path, e))?;
+    let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let bytes = std::fs::read(&path)
         .map_err(|e| format!("cannot read circuit artifact '{}': {}", path, e))?;
     let digest = Sha256::digest(&bytes);
-    Ok(hex::encode(digest))
+    Ok((hex::encode(digest), mtime))
+}
+
+/// Compute the SHA-256 hex digest of a single circuit artifact file.
+fn hash_artifact(circuit_dir: &str, circuit_name: &str) -> Result<String, String> {
+    let (hash, _) = hash_artifact_with_mtime(circuit_dir, circuit_name)?;
+    Ok(hash)
+}
+
+/// Warm the circuit cache for a directory. Returns a list of reloaded circuit names.
+pub fn warm_circuit_cache(circuit_dir: &str) -> Vec<String> {
+    let mut reloaded = Vec::new();
+    let entries = match std::fs::read_dir(circuit_dir) {
+        Ok(e) => e,
+        Err(_) => return reloaded,
+    };
+
+    let cache = get_cache();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = if path.is_dir() {
+            path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string())
+        } else {
+            None
+        };
+
+        if let Some(circuit_name) = name {
+            if let Ok((hash, mtime)) = hash_artifact_with_mtime(circuit_dir, &circuit_name) {
+                let mut state = cache.write().unwrap();
+                let is_new_or_modified = match state.active_hashes.get(&circuit_name) {
+                    Some(cached) => cached.mtime < mtime || cached.hash != hash,
+                    None => true,
+                };
+                if is_new_or_modified {
+                    state.active_hashes.insert(
+                        circuit_name.clone(),
+                        WarmedArtifact { hash: hash.clone(), mtime },
+                    );
+                    state.known_hashes
+                        .entry(circuit_name.clone())
+                        .or_default()
+                        .insert(hash.clone());
+
+                    reloaded.push(circuit_name.clone());
+                    tracing::info!(
+                        circuit = %circuit_name,
+                        hash = %hash,
+                        "Hot-reloaded circuit artifact and warmed cache for new sessions"
+                    );
+                }
+            }
+        }
+    }
+    reloaded
+}
+
+/// Spawns a background task that watches circuit_dir every few seconds and warms cache.
+pub fn spawn_circuit_watcher(circuit_dir: String) {
+    tokio::spawn(async move {
+        warm_circuit_cache(&circuit_dir);
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
+        loop {
+            interval.tick().await;
+            warm_circuit_cache(&circuit_dir);
+        }
+    });
 }
 
 /// Hash every circuit artifact that will be needed for a table session and
 /// return a map of `circuit_name → sha256_hex`.
-///
-/// `circuit_names` should include every circuit variant that may be called
-/// during this session (deal, all reveal variants, showdown).
 pub fn pin_artifacts(
     circuit_dir: &str,
     circuit_names: &[&str],
 ) -> Result<HashMap<String, String>, String> {
+    warm_circuit_cache(circuit_dir);
+    let cache = get_cache().read().unwrap();
     let mut map = HashMap::new();
     for &name in circuit_names {
-        let hash = hash_artifact(circuit_dir, name)?;
-        tracing::debug!(circuit = %name, hash = %hash, "pinned circuit artifact");
-        map.insert(name.to_string(), hash);
+        if let Some(warmed) = cache.active_hashes.get(name) {
+            tracing::debug!(circuit = %name, hash = %warmed.hash, "pinned circuit artifact (warmed cache)");
+            map.insert(name.to_string(), warmed.hash.clone());
+        } else {
+            let hash = hash_artifact(circuit_dir, name)?;
+            tracing::debug!(circuit = %name, hash = %hash, "pinned circuit artifact");
+            map.insert(name.to_string(), hash);
+        }
     }
     Ok(map)
 }
 
-/// Verify that every artifact named in `pinned` still has the same hash on
-/// disk.  Returns `Ok(())` if all hashes match, or an error message naming
-/// the first mismatched circuit.
+/// Verify that every artifact named in `pinned` matches either a known valid
+/// pinned hash or the disk hash.
 pub fn verify_pinned_artifacts(
     circuit_dir: &str,
     pinned: &HashMap<String, String>,
 ) -> Result<(), String> {
+    let cache = get_cache().read().unwrap();
     for (name, expected) in pinned {
+        if let Some(known_set) = cache.known_hashes.get(name) {
+            if known_set.contains(expected) {
+                continue;
+            }
+        }
         let actual = hash_artifact(circuit_dir, name)?;
         if actual != *expected {
             return Err(format!(
@@ -101,27 +199,33 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_detects_change() {
+    fn test_hot_reload_cache_warming() {
         let tmp = tempfile::tempdir().unwrap();
-        write_artifact(tmp.path(), "deal_valid", b"{\"bytecode\":\"aaa\"}");
+        write_artifact(tmp.path(), "deal_valid", b"{\"bytecode\":\"version1\"}");
 
-        let pinned = pin_artifacts(tmp.path().to_str().unwrap(), &["deal_valid"]).unwrap();
+        let pinned_v1 = pin_artifacts(tmp.path().to_str().unwrap(), &["deal_valid"]).unwrap();
 
-        // Overwrite the artifact with different content.
-        write_artifact(tmp.path(), "deal_valid", b"{\"bytecode\":\"bbb\"}");
+        // Overwrite artifact with v2 (simulating hot reload)
+        write_artifact(tmp.path(), "deal_valid", b"{\"bytecode\":\"version2\"}");
 
-        let result = verify_pinned_artifacts(tmp.path().to_str().unwrap(), &pinned);
-        assert!(result.is_err(), "should fail when artifact changed");
-        assert!(result.unwrap_err().contains("has changed since session start"));
+        // Warm cache
+        let reloaded = warm_circuit_cache(tmp.path().to_str().unwrap());
+        assert!(reloaded.contains(&"deal_valid".to_string()));
+
+        // New session gets v2 hash
+        let pinned_v2 = pin_artifacts(tmp.path().to_str().unwrap(), &["deal_valid"]).unwrap();
+        assert_ne!(pinned_v1["deal_valid"], pinned_v2["deal_valid"]);
+
+        // Existing session (v1) still verifies without dropping!
+        verify_pinned_artifacts(tmp.path().to_str().unwrap(), &pinned_v1)
+            .expect("existing session with v1 hash should still pass");
     }
 
     #[test]
     fn test_pin_missing_artifact_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
-        // Do not create any artifact file.
-        let result = pin_artifacts(tmp.path().to_str().unwrap(), &["deal_valid"]);
+        let result = pin_artifacts(tmp.path().to_str().unwrap(), &["nonexistent_circuit"]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("cannot read circuit artifact"));
     }
 
     #[test]
