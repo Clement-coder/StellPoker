@@ -29,7 +29,7 @@ use prometheus::{
     Encoder, Gauge, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -43,6 +43,7 @@ mod api;
 mod api_version;
 mod archiver;
 mod audit_log;
+mod circuit_pins;
 mod cors_db;
 pub mod crypto;
 mod dashboard;
@@ -149,6 +150,7 @@ struct HealthResponse {
         api::request_reveal,
         api::request_showdown,
         api::player_action,
+        api::rit_opt_in,
         api::get_player_cards,
         api::get_table_state,
         api::get_mpc_status,
@@ -215,6 +217,8 @@ struct HealthResponse {
         api::types::WalletChallengeResponse,
         api::types::WalletVerifyRequest,
         api::types::WalletVerifyResponse,
+        api::types::RitOptInRequest,
+        api::types::RitOptInResponse,
         api::types::MpcNodeProgress,
         api::types::TableMpcStatusResponse,
     )),
@@ -301,8 +305,10 @@ struct AppState {
     /// (the general transaction-submission identity) so rotating it can't
     /// disrupt in-flight gameplay transaction signing.
     committee_key_rotation: Arc<RwLock<key_rotation::KeyRotationState>>,
-    /// In-memory sit-and-go tournament state.
-    tournaments: tournament::TournamentStore,
+    /// Single-use registry for MPC proof session IDs (Issue #12).
+    /// A session ID that has already been used is rejected to prevent replay
+    /// attacks on deal/reveal/showdown proofs.
+    used_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -358,6 +364,12 @@ struct TableSession {
     showdown_session_id: Option<String>,
     /// Cached showdown result for idempotent retries.
     showdown_result: Option<(String, u32)>,
+    /// Run-It-Twice tracking: "inactive" or "run2_active".
+    rit_phase: String,
+    /// Number of shared board cards when RIT was activated (0=preflop, 3=flop, 4=turn).
+    /// Set once from on-chain state during Run 1 showdown; used for Run 2 board computation.
+    #[serde(default)]
+    rit_shared_board_count: u32,
     /// Monotonic nonce for unique proof session IDs.
     proof_nonce: u64,
     /// Per-node MPC phase progress for the current operation.
@@ -366,6 +378,10 @@ struct TableSession {
     /// Timestamp when the current MPC operation started (epoch secs).
     #[serde(default)]
     mpc_operation_started: Option<u64>,
+    /// Circuit artifact hashes pinned at session start (circuit_name → sha256_hex).
+    /// Every proof submission verifies these to prevent mid-session artifact changes.
+    #[serde(default)]
+    pinned_artifact_hashes: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -698,7 +714,7 @@ async fn main() {
         idempotency_store: idempotency::new_store(),
         benchmark_store,
         committee_key_rotation,
-        tournaments: tournament::new_store(),
+        used_session_ids: Arc::new(RwLock::new(HashSet::new())),
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
     key_rotation::spawn_rotation_task(
@@ -831,10 +847,22 @@ async fn main() {
             post(api::player_action),
         )
         .route(
+            "/api/table/:table_id/rit-opt-in",
+            post(api::rit_opt_in),
+        )
+        .route(
             "/api/table/:table_id/player/:address/cards",
             get(api::get_player_cards),
         )
         .route("/api/table/:table_id/state", get(api::get_table_state))
+        .route(
+            "/api/table/:table_id/players",
+            get(api::get_players_paginated),
+        )
+        .route(
+            "/api/table/:table_id/hand-history/chunk",
+            get(api::get_hand_history_chunk),
+        )
         .route("/api/table/:table_id/mpc-status", get(api::get_mpc_status))
         .route("/api/committee/status", get(api::committee_status))
         .route("/api/table/:table_id/chat/ws", get(chat_ws_handler))

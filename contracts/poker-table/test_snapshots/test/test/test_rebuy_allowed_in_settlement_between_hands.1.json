@@ -1159,6 +1159,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "last_raise_size"
+                    },
+                    "val": {
+                      "i128": "10"
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "phase"
                     },
                     "val": {

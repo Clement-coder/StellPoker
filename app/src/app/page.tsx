@@ -7,6 +7,7 @@ import { PixelWorld } from "@/components/PixelWorld";
 import { PixelCat } from "@/components/PixelCat";
 import { PixelChip } from "@/components/PixelChip";
 import { TransactionSimulation } from "@/components/TransactionSimulation";
+import { TokenSelector } from "@/components/TokenSelector";
 import * as api from "@/lib/api";
 import { useJoinTableSimulation } from "@/lib/use-transaction-simulation";
 import {
@@ -57,6 +58,7 @@ export default function Home() {
   const [availableWallets, setAvailableWallets] = useState<{ type: WalletType; name: string; isInstalled: boolean }[]>([]);
   const [busy, setBusy] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(2);
+  const [tokenChoice, setTokenChoice] = useState<{ type: string; sacAddress?: string }>({ type: "XLM" });
   const [buyInXlm, setBuyInXlm] = useState(
     formatStroopsToXlm(BigInt("1000000000"))
   );
@@ -147,7 +149,8 @@ export default function Home() {
         wallet,
         players,
         solo,
-        buyIn ? buyIn.toString() : undefined
+        buyIn ? buyIn.toString() : undefined,
+        tokenChoice.type === "XLM" ? "XLM" : tokenChoice.sacAddress
       );
 
       if (!solo && buyIn) {
@@ -357,10 +360,15 @@ export default function Home() {
             fontFamily: "'Press Start 2P', monospace",
           }}
         >
-          ←
         </button>
 
-{/* Wallet indicator moved below main panel — see after screen content */}
+        {/* Admin Dashboard Navigation link (#29) */}
+        <Link
+          href="/admin"
+          className="absolute top-6 right-6 z-20 text-[10px] px-3 py-2 border border-[#8b6914] bg-[#1a120c] text-[#f1c40f] hover:bg-[#8b6914] hover:text-white transition"
+        >
+          🛡️ ADMIN
+        </Link>
 
         {/* Logo area */}
         <div className="text-center">
@@ -555,17 +563,22 @@ export default function Home() {
 
             <div className="w-full flex flex-col gap-2">
               <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
-                BUY-IN (XLM)
+                BUY-IN
               </div>
-              <input
-                type="text"
-                value={buyInXlm}
-                onChange={(e) => setBuyInXlm(e.target.value)}
-                placeholder="100"
-                disabled={busy}
-                className="w-full text-center text-[12px]"
-                style={{ padding: "8px 10px" }}
-              />
+
+              <div className="flex items-center gap-3">
+                <TokenSelector value={{ type: tokenChoice.type }} onChange={(v) => setTokenChoice({ type: v.type, sacAddress: v.sacAddress })} />
+                <input
+                  type="text"
+                  value={buyInXlm}
+                  onChange={(e) => setBuyInXlm(e.target.value)}
+                  placeholder="100"
+                  disabled={busy}
+                  className="w-full text-center text-[12px]"
+                  style={{ padding: "8px 10px" }}
+                />
+              </div>
+
               <div className="text-[9px]" style={{ color: "#95a5a6" }}>
                 Multiplayer only.
               </div>

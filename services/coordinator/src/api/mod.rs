@@ -23,7 +23,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
+use crate::{circuit_pins, feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -225,8 +225,11 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        rit_phase: "inactive".to_string(),
+        rit_shared_board_count: 0,
         mpc_node_progress: Vec::new(),
         mpc_operation_started: None,
+        pinned_artifact_hashes: HashMap::new(),
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -495,8 +498,11 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            rit_phase: "inactive".to_string(),
+            rit_shared_board_count: 0,
             mpc_node_progress: Vec::new(),
             mpc_operation_started: None,
+            pinned_artifact_hashes: HashMap::new(),
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -521,6 +527,14 @@ pub async fn request_deal(
     })?;
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
@@ -590,6 +604,8 @@ pub async fn request_deal(
     session.player_card_positions = player_card_positions;
     session.board_indices = Vec::new();
     session.phase = "preflop".to_string();
+    session.rit_phase = "inactive".to_string();
+    session.rit_shared_board_count = 0;
     session.deal_session_id = deal_proof.session_id.clone();
     session.deal_tx_hash = tx_hash.clone();
     session.reveal_tx_hashes = HashMap::new();
@@ -599,6 +615,40 @@ pub async fn request_deal(
     session.showdown_session_id = None;
     session.showdown_result = None;
     session.proof_nonce = 0;
+
+    // Pin circuit artifact hashes for this session (Issue #256).
+    // Every reveal and showdown call will verify these before generating proofs.
+    let player_count = session.player_order.len();
+    let reveal_circuit = "reveal_board_valid".to_string();
+    let showdown_circuit_name = parameterised_circuit_name("showdown_valid", player_count);
+    let deal_circuit_name = deal_circuit.clone();
+    let circuits_to_pin: Vec<&str> = vec![
+        &deal_circuit_name,
+        &reveal_circuit,
+        &showdown_circuit_name,
+    ];
+    match circuit_pins::pin_artifacts(&state.mpc_config.circuit_dir, &circuits_to_pin) {
+        Ok(pins) => {
+            tracing::info!(
+                table_id = table_id,
+                circuits = ?circuits_to_pin,
+                "circuit artifacts pinned for session"
+            );
+            session.pinned_artifact_hashes = pins;
+        }
+        Err(e) => {
+            // Artifacts may not be present in all environments (e.g. CI without
+            // compiled circuits). Log a warning but don't fail the deal — the
+            // empty map means no verification will be performed this session.
+            tracing::warn!(
+                table_id = table_id,
+                error = %e,
+                "circuit artifact pinning skipped (artifacts not found)"
+            );
+            session.pinned_artifact_hashes = HashMap::new();
+        }
+    }
+
     drop(tables);
 
     broadcast_table_state(&state, table_id).await;
@@ -690,6 +740,22 @@ pub async fn request_reveal(
         }
     }
 
+    // Issue #256: verify pinned artifact hashes before generating the reveal proof.
+    if !session.pinned_artifact_hashes.is_empty() {
+        if let Err(e) = circuit_pins::verify_pinned_artifacts(
+            &state.mpc_config.circuit_dir,
+            &session.pinned_artifact_hashes,
+        ) {
+            tracing::error!(
+                table_id = table_id,
+                phase = %phase,
+                error = %e,
+                "circuit artifact changed mid-session — rejecting reveal"
+            );
+            return Err(StatusCode::CONFLICT);
+        }
+    }
+
     let prepared_reveal = mpc::prepare_reveal_from_nodes(
         &state.mpc_client,
         &node_endpoints,
@@ -706,6 +772,14 @@ pub async fn request_reveal(
     })?;
 
     let proof_session_id = next_proof_session_id(session, &format!("reveal-{}", phase));
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let reveal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
@@ -834,7 +908,11 @@ pub async fn request_showdown(
         }));
     }
 
-    if session.phase != "river" && session.phase != "showdown" {
+    if session.phase != "river"
+        && session.phase != "showdown"
+        && session.phase != "showdown_run1"
+        && session.phase != "showdown_run2"
+    {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -851,12 +929,21 @@ pub async fn request_showdown(
         }
     }
 
+    // For Run 2 showdown, the correct board indices are the last 5 elements
+    // of board_indices, because Run 2's reveals include all 5 of its board cards
+    // (shared cards re-revealed + Run 2's new cards) at the end of the sequence.
+    let showdown_board_indices: Vec<u32> = if session.phase == "showdown_run2" && session.board_indices.len() >= 5 {
+        session.board_indices[session.board_indices.len() - 5..].to_vec()
+    } else {
+        session.board_indices.clone()
+    };
+
     let prepared_showdown = mpc::prepare_showdown_from_nodes(
         &state.mpc_client,
         &node_endpoints,
         &state.mpc_config.circuit_dir,
         table_id,
-        &session.board_indices,
+        &showdown_board_indices,
         session.player_order.len() as u32,
         &session.hand_commitments,
         &session.deck_root,
@@ -868,6 +955,14 @@ pub async fn request_showdown(
     })?;
 
     let proof_session_id = next_proof_session_id(session, "showdown");
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let showdown_circuit =
         parameterised_circuit_name("showdown_valid", session.player_order.len());
@@ -962,17 +1057,47 @@ pub async fn request_showdown(
         }
     };
 
-    session.phase = "settlement".to_string();
-    session.showdown_tx_hash = tx_hash.clone();
-    session.showdown_session_id = Some(showdown_proof.session_id.clone());
-    session.showdown_result = if settled_by_timeout {
-        None
+    let is_rit_run1 = session.phase == "showdown_run1";
+    let is_rit_run2 = session.phase == "showdown_run2";
+
+    if is_rit_run1 {
+        // Run 1 showdown complete — transition to Run 2 dealing
+        session.phase = "preflop".to_string();
+        session.rit_phase = "run2_active".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        // Don't cache showdown_result yet — Run 2 is still coming
+        session.showdown_result = None;
+    } else if is_rit_run2 {
+        // Run 2 showdown complete — full settlement
+        session.phase = "settlement".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        session.showdown_result = if settled_by_timeout {
+            None
+        } else {
+            Some((winner.clone(), parsed_showdown.winner_index))
+        };
     } else {
-        Some((winner.clone(), parsed_showdown.winner_index))
-    };
+        // Normal showdown
+        session.phase = "settlement".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        session.showdown_result = if settled_by_timeout {
+            None
+        } else {
+            Some((winner.clone(), parsed_showdown.winner_index))
+        };
+    }
 
     let (status, winner, winner_index) = if settled_by_timeout {
         ("settled_timeout".to_string(), String::new(), 0)
+    } else if is_rit_run1 {
+        (
+            "showdown_run1_complete".to_string(),
+            winner.clone(),
+            parsed_showdown.winner_index,
+        )
     } else {
         (
             "showdown_complete".to_string(),
@@ -991,6 +1116,66 @@ pub async fn request_showdown(
         proof_size: showdown_proof.proof.len(),
         session_id: showdown_proof.session_id,
         tx_hash,
+    }))
+}
+
+/// POST /api/table/{table_id}/rit-opt-in
+///
+/// Opt into or decline Run-It-Twice when heads-up all-in.
+#[utoipa::path(
+    post,
+    path = "/api/table/{table_id}/rit-opt-in",
+    tag = "Tables",
+    request_body = RitOptInRequest,
+    responses(
+        (status = 200, description = "RIT opt-in processed", body = RitOptInResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 503, description = "Soroban not configured"),
+    ),
+    security(
+        ("WalletAuth" = [])
+    )
+)]
+pub async fn rit_opt_in(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    headers: HeaderMap,
+    Json(req): Json<RitOptInRequest>,
+) -> Result<Json<RitOptInResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+    enforce_rate_limit(&state, &headers, table_id, "rit_opt_in").await?;
+    let auth = validate_signed_request(&state, &headers, table_id, "rit_opt_in", None).await?;
+
+    if !state.soroban_config.is_configured() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let tx_hash = soroban::submit_rit_opt_in(
+        &state.soroban_config,
+        table_id,
+        &auth.address,
+        req.opt_in,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            "rit_opt_in failed: table={}, player={}, opt_in={}, err={}",
+            table_id,
+            auth.address,
+            req.opt_in,
+            e
+        );
+        if e.contains("Error(Contract,") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
+    })?;
+
+    Ok(Json(RitOptInResponse {
+        status: "success".to_string(),
+        tx_hash: if tx_hash.is_empty() { None } else { Some(tx_hash) },
     }))
 }
 
@@ -1057,6 +1242,7 @@ pub async fn player_action(
         &player_address,
         &normalized,
         amount,
+        req.seq,
     )
     .await
     .map_err(|e| {
@@ -1275,6 +1461,87 @@ pub async fn get_table_state(
         })?;
 
     Ok(Json(TableStateResponse { state: result }))
+}
+
+/// GET /api/table/{table_id}/players?offset=0&limit=6
+///
+/// Offset-based paginated player list. Extends TTL of the table entry
+/// (bump-on-read pattern) to keep the pagination cursor alive.
+pub async fn get_players_paginated(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    Query(params): Query<PaginatedQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(6).min(50);
+    let raw = soroban::get_players_paginated(&state.soroban_config, table_id, offset, limit)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to read paginated players: {}", e);
+            StatusCode::SERVICE_UNAVAILABLE
+        })?;
+
+    let players: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Array(vec![]));
+
+    // Also fetch total count
+    let total_raw = soroban::get_player_count(&state.soroban_config, table_id).await;
+    let total: u32 = total_raw
+        .ok()
+        .and_then(|r| serde_json::from_str::<serde_json::Value>(&r).ok())
+        .and_then(|v| v.as_u64().map(|n| n as u32))
+        .unwrap_or(0);
+
+    Ok(Json(serde_json::json!({
+        "players": players,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+    })))
+}
+
+/// GET /api/table/{table_id}/hand-history/chunk?offset=0&limit=5
+///
+/// Offset-based paginated hand history (newest first). Each hand record
+/// read on-chain has its TTL extended, keeping pagination cursors alive.
+pub async fn get_hand_history_chunk(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    Query(params): Query<PaginatedQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let offset = params.offset.unwrap_or(0);
+    let limit = params.limit.unwrap_or(5).min(16);
+    let raw =
+        soroban::get_hand_history_chunk(&state.soroban_config, table_id, offset, limit)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to read hand history chunk: {}", e);
+                StatusCode::SERVICE_UNAVAILABLE
+            })?;
+
+    let records: serde_json::Value =
+        serde_json::from_str(&raw).unwrap_or(serde_json::Value::Array(vec![]));
+
+    // Also fetch the meta for total available
+    let meta_raw = soroban::get_table_state(&state.soroban_config, table_id)
+        .await
+        .ok()
+        .and_then(|r| {
+            serde_json::from_str::<serde_json::Value>(&r).ok()
+        });
+    let total = meta_raw
+        .as_ref()
+        .and_then(|v| v.get("hand_number"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+
+    Ok(Json(serde_json::json!({
+        "records": records,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "capacity": 16u32,
+    })))
 }
 
 /// GET /api/table/{table_id}/mpc-status
