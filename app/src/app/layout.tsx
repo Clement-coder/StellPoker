@@ -1,9 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { I18nProvider } from "@/lib/i18n/context";
-import dynamic from "next/dynamic";
-
-const ThemeToggle = dynamic(() => import("@/components/ThemeToggle").then(m => m.ThemeToggle), { ssr: false });
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export const metadata: Metadata = {
   title: "Poker on Stellar",
@@ -20,7 +18,6 @@ export default function RootLayout({
       <body>
         <I18nProvider>
           <div style={{ position: "absolute", top: 8, right: 8, zIndex: 9999 }}>
-            {/* ThemeToggle is client-side only */}
             <ThemeToggle />
           </div>
           {children}
