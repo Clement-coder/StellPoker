@@ -44,6 +44,9 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     table.side_pots = Vec::new(env);
     history::reset_actions(env, table);
 
+    // Reset minimum-raise size to one big blind for the new hand.
+    table.last_raise_size = table.config.big_blind;
+
     // Transition to dealing phase (committee will shuffle + deal)
     table.phase = GamePhase::Dealing;
     table.last_action_ledger = env.ledger().sequence();

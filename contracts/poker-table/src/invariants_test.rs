@@ -120,6 +120,7 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
         action_deadline: 0,
         hand_actions: Vec::new(env),
         jackpot_balance: 0,
+        last_raise_size: 0,
     };
     (table, total)
 }

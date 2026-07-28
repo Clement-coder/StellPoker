@@ -21,6 +21,8 @@ mod test;
 mod timeout;
 #[cfg(test)]
 mod tournament_lifecycle_test;
+#[cfg(test)]
+mod min_raise_test;
 mod types;
 mod verifier;
 
@@ -252,6 +254,7 @@ impl PokerTableContract {
             action_deadline: 0,
             hand_actions: Vec::new(&env),
             jackpot_balance: 0,
+            last_raise_size: config.big_blind,
         };
 
         save_table(&env, &table);

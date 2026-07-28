@@ -246,6 +246,10 @@ pub struct TableState {
     /// Betting actions taken so far in the current hand. Cleared when a hand
     /// starts and archived into the hand-history buffer when it settles.
     pub hand_actions: Vec<ActionRecord>,
+    /// Size of the last bet or raise in the current betting round.
+    /// The next raise must be at least this large (standard poker minimum-raise
+    /// rule). Cleared to `big_blind` when a new betting round begins.
+    pub last_raise_size: i128,
 }
 
 #[contracttype]

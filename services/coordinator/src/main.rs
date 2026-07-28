@@ -29,7 +29,7 @@ use prometheus::{
     Encoder, Gauge, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -300,6 +300,10 @@ struct AppState {
     /// (the general transaction-submission identity) so rotating it can't
     /// disrupt in-flight gameplay transaction signing.
     committee_key_rotation: Arc<RwLock<key_rotation::KeyRotationState>>,
+    /// Single-use registry for MPC proof session IDs (Issue #12).
+    /// A session ID that has already been used is rejected to prevent replay
+    /// attacks on deal/reveal/showdown proofs.
+    used_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -695,6 +699,7 @@ async fn main() {
         idempotency_store: idempotency::new_store(),
         benchmark_store,
         committee_key_rotation,
+        used_session_ids: Arc::new(RwLock::new(HashSet::new())),
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
     key_rotation::spawn_rotation_task(
