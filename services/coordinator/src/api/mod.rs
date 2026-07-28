@@ -524,6 +524,14 @@ pub async fn request_deal(
     })?;
 
     let proof_session_id = format!("table-{}-deal-{}", table_id, Uuid::new_v4());
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
     let deal_proof = mpc::generate_proof_from_share_sets(
@@ -711,6 +719,14 @@ pub async fn request_reveal(
     })?;
 
     let proof_session_id = next_proof_session_id(session, &format!("reveal-{}", phase));
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let reveal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
@@ -886,6 +902,14 @@ pub async fn request_showdown(
     })?;
 
     let proof_session_id = next_proof_session_id(session, "showdown");
+    // Issue #12: enforce single-use — reject if this session ID was already consumed.
+    {
+        let mut used = state.used_session_ids.write().await;
+        if !used.insert(proof_session_id.clone()) {
+            tracing::error!("Duplicate MPC session ID rejected (replay attack guard): {}", proof_session_id);
+            return Err(StatusCode::CONFLICT);
+        }
+    }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let showdown_circuit =
         parameterised_circuit_name("showdown_valid", session.player_order.len());

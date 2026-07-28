@@ -1,0 +1,12 @@
+[package]
+name = "showdown_valid_2p"
+type = "bin"
+authors = ["Stellar Poker"]
+compiler_version = ">=0.36.0"
+
+[dependencies]
+stellar_poker_lib = { path = "../lib" }
+
+[package.metadata.circuit]
+description = "Parameterised showdown_valid for 2 players (Issue #7)."
+max_players = 2

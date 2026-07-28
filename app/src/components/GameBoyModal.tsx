@@ -7,6 +7,7 @@ import { clearSavedWallet } from "@/lib/freighter";
 import { ProofExplorer } from "./ProofExplorer";
 import { LanguageSelector } from "./LanguageSelector";
 import { useT } from "@/lib/i18n/context";
+import { getSfxMuted, setSfxMuted, getSfxVolume, setSfxVolume, playSound } from "@/lib/sound-engine";
 
 type Tab = "settings" | "flappy" | "proofs";
 
@@ -274,6 +275,8 @@ export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("settings");
   const [volume, setVolume] = useState(() => Math.round(getMasterVolume() * 100));
+  const [sfxMuted, setSfxMutedState] = useState(() => getSfxMuted());
+  const [sfxVolume, setSfxVolumeState] = useState(() => Math.round(getSfxVolume() * 100));
   const [flappy, setFlappy] = useState<FlappyState>(initFlappy);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const loopRef = useRef<number>(0);
@@ -284,6 +287,15 @@ export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
   useEffect(() => {
     setMasterVolume(volume / 100);
   }, [volume]);
+
+  // Sync SFX settings to sound engine
+  useEffect(() => {
+    setSfxMuted(sfxMuted);
+  }, [sfxMuted]);
+
+  useEffect(() => {
+    setSfxVolume(sfxVolume / 100);
+  }, [sfxVolume]);
 
   // Flappy Bird game loop
   useEffect(() => {
@@ -535,6 +547,111 @@ export function GameBoyModal({ open, onClose, onLogout }: GameBoyModalProps) {
                     }}>
                       {volume}%
                     </div>
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div style={{ borderTop: "1px dashed #6b7a60" }} />
+
+                {/* SFX Toggle */}
+                <div>
+                  <div style={{
+                    fontSize: "7px",
+                    fontFamily: "'Press Start 2P', monospace",
+                    color: "#3a4438",
+                    marginBottom: "5px",
+                  }}>
+                    SFX
+                  </div>
+                  {/* Mute toggle row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "6px" }}>
+                    <button
+                      onClick={() => setSfxMutedState((m) => !m)}
+                      title={sfxMuted ? "Unmute sound effects" : "Mute sound effects"}
+                      style={{
+                        fontFamily: "'Press Start 2P', monospace",
+                        fontSize: "7px",
+                        padding: "3px 6px",
+                        background: sfxMuted ? "#3a2a2a" : "#2a3a2a",
+                        border: sfxMuted ? "1px solid #7f3333" : "1px solid #3a4438",
+                        color: sfxMuted ? "#c06060" : "#6b7a60",
+                        cursor: "pointer",
+                        minWidth: "24px",
+                        textAlign: "center",
+                      }}
+                    >
+                      {sfxMuted ? "✕" : "♪"}
+                    </button>
+                    {/* SFX volume slider */}
+                    <div style={{ flex: 1, position: "relative", height: "12px", opacity: sfxMuted ? 0.4 : 1 }}>
+                      <div style={{
+                        position: "absolute",
+                        top: "5px",
+                        left: 0,
+                        right: 0,
+                        height: "3px",
+                        background: "#6b7a60",
+                      }} />
+                      <div style={{
+                        position: "absolute",
+                        top: "5px",
+                        left: 0,
+                        width: `${sfxVolume}%`,
+                        height: "3px",
+                        background: "#3a4438",
+                      }} />
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={sfxVolume}
+                        disabled={sfxMuted}
+                        onChange={(e) => setSfxVolumeState(Number(e.target.value))}
+                        onMouseUp={() => { if (!sfxMuted) void playSound("chip"); }}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: "100%",
+                          opacity: 0,
+                          cursor: sfxMuted ? "not-allowed" : "pointer",
+                          margin: 0,
+                        }}
+                      />
+                    </div>
+                    <div style={{
+                      fontSize: "6px",
+                      fontFamily: "'Press Start 2P', monospace",
+                      color: "#3a4438",
+                      minWidth: "24px",
+                      textAlign: "right",
+                    }}>
+                      {sfxMuted ? "OFF" : `${sfxVolume}%`}
+                    </div>
+                  </div>
+                  {/* Quick test buttons */}
+                  <div style={{ display: "flex", gap: "3px", flexWrap: "wrap" }}>
+                    {(["shuffle", "chip", "flip", "winner"] as const).map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => { if (!sfxMuted) void playSound(name); }}
+                        disabled={sfxMuted}
+                        style={{
+                          fontFamily: "'Press Start 2P', monospace",
+                          fontSize: "6px",
+                          padding: "2px 5px",
+                          background: sfxMuted ? "#2a2a2a" : "#3a4438",
+                          border: "1px solid #6b7a60",
+                          color: sfxMuted ? "#555" : "#b8c4a0",
+                          cursor: sfxMuted ? "not-allowed" : "pointer",
+                          opacity: sfxMuted ? 0.5 : 1,
+                        }}
+                        title={`Test ${name} sound`}
+                      >
+                        {name === "shuffle" ? "SHFL" : name === "chip" ? "CHIP" : name === "flip" ? "FLIP" : "WIN"}
+                      </button>
+                    ))}
                   </div>
                 </div>
 

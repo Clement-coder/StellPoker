@@ -98,6 +98,9 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
             game_hub: admin.clone(),
             rake_bps: 0,
             max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         },
         phase: GamePhase::Showdown,
         players,
@@ -117,6 +120,8 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
         action_deadline: 0,
         hand_actions: Vec::new(env),
         rit_state: None,
+        jackpot_balance: 0,
+        last_raise_size: 0,
     };
     (table, total)
 }

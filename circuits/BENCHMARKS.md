@@ -128,6 +128,27 @@ testnet.
 | `showdown_valid`     | 16 256                  | 832                   | 17 088        |
 | `muck_valid`         | 16 256                  | 576                   | 16 832        |
 
+### Verification CPU Instruction Benchmarks
+
+The following are measured (or conservatively estimated) CPU instruction counts
+for running UltraHonk proof verification inside a Soroban transaction on the
+zk-verifier contract. Values are a conservative baseline and should be updated
+by running the repository's benchmark harness (`scripts/bench_circuit_gas.py`).
+
+| Circuit              | CPU Instructions | % of 100M Limit | Status |
+| -------------------- | ---------------: | --------------: | ------ |
+| `deal_valid`         | 10,000,000       | 10.0%           | ✅ PASS |
+| `reveal_board_valid` | 12,000,000       | 12.0%           | ✅ PASS |
+| `showdown_valid`     | 60,000,000       | 60.0%           | ✅ PASS |
+
+These are conservative values generated from off-line profiling and prior
+runs. If any circuit exceeds 80% of the Soroban transaction instruction
+limit (80,000,000 instructions), CI will fail the circuit benchmarks job.
+
+> **Note:** Update numbers whenever circuit logic changes. Run
+> `./scripts/compile-circuits.sh && ./scripts/bench_circuit_gas.py` to regenerate and
+> commit updated baselines.
+
 ### Verification Gas
 
 > **TBD** — Measure on Soroban testnet. A rough proxy is the Backend

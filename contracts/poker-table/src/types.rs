@@ -23,6 +23,17 @@ pub struct TableConfig {
     /// session at this table. `0` means unlimited. The counter resets when a
     /// player leaves and rejoins.
     pub max_rebuys: u32,
+    /// Share of the total rake (in basis points) that is diverted into the
+    /// bad-beat jackpot pool instead of going to the house. `0` disables the
+    /// jackpot entirely.
+    pub jackpot_rake_share_bps: u32,
+    /// Minimum hand category required for a bad-beat qualifying hand
+    /// (e.g. `7` = FourOfAKind).  Used alongside `min_bad_beat_rank` to
+    /// compute the qualifying score threshold.
+    pub min_bad_beat_category: u32,
+    /// Minimum rank of the quad / trips / card required within the
+    /// qualifying category (e.g. `12` = Ace).
+    pub min_bad_beat_rank: u32,
 }
 
 #[contracterror]
@@ -79,6 +90,8 @@ pub enum PokerTableError {
     RunItTwiceNotEnabled = 48,
     RitAlreadyActive = 49,
     BoardAlreadyRevealedForRun = 50,
+    JackpotNotConfigured = 45,
+    BadBeatHandDataInvalid = 46,
 }
 
 #[contracttype]
@@ -261,6 +274,9 @@ pub struct TableState {
     pub session_id: u32, // Game hub session ID for current hand
     /// Accumulated rake collected from settled hands, withdrawable by `admin`.
     pub rake_balance: i128,
+    /// Accumulated bad-beat jackpot pool, fed by a share of each hand's rake.
+    /// Paid out when a qualifying bad beat occurs at showdown.
+    pub jackpot_balance: i128,
     /// Ledger sequence by which the current player must act. Any other seated
     /// player may call `force_fold` after this deadline is reached.
     pub action_deadline: u32,
@@ -269,6 +285,10 @@ pub struct TableState {
     pub hand_actions: Vec<ActionRecord>,
     /// Run-It-Twice state when two players are all-in heads-up.
     pub rit_state: Option<RitState>,
+    /// Size of the last bet or raise in the current betting round.
+    /// The next raise must be at least this large (standard poker minimum-raise
+    /// rule). Cleared to `big_blind` when a new betting round begins.
+    pub last_raise_size: i128,
 }
 
 #[contracttype]
