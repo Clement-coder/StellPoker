@@ -236,9 +236,14 @@ async fn prepare_from_nodes(
         let endpoint = endpoint.clone();
         let handle = tokio::spawn(async move {
             let call_start = std::time::Instant::now();
-            let resp = client
-                .post(&url)
-                .json(&body)
+            let mut req = client.post(&url).json(&body);
+            // Propagate the active trace context to MPC nodes so the full
+            // frontend → coordinator → node → Soroban chain appears as one
+            // distributed trace in Jaeger / Grafana Tempo (Issue #255).
+            if let Some(tp) = crate::telemetry::current_traceparent() {
+                req = req.header("traceparent", tp);
+            }
+            let resp = req
                 .send()
                 .await
                 .map_err(|e| format!("failed to call node {} {}: {}", idx, op, e))?;
@@ -638,14 +643,17 @@ async fn trigger_and_collect_proof(
         let handle = tokio::spawn(async move {
             let mut last_conn_error: Option<String> = None;
             for attempt in 1..=TRIGGER_RETRY_ATTEMPTS {
-                let resp = client
+                let mut req = client
                     .post(&url)
                     .json(&serde_json::json!({
                         "circuit_dir": circuit_dir,
                         "crs_path": crs_dir,
-                    }))
-                    .send()
-                    .await;
+                    }));
+                // Issue #255: propagate trace context to MPC nodes.
+                if let Some(tp) = crate::telemetry::current_traceparent() {
+                    req = req.header("traceparent", tp);
+                }
+                let resp = req.send().await;
 
                 let resp = match resp {
                     Ok(r) => r,
