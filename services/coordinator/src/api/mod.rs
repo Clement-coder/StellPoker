@@ -8,6 +8,7 @@ pub mod flags;
 mod parsing;
 pub mod plugins;
 mod session;
+pub mod tournament_api;
 pub mod types;
 
 pub use admin_extended::*;
