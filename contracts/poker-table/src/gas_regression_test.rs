@@ -235,7 +235,7 @@ fn gas_player_action_call() {
     let actor = table.players.get(table.current_turn).unwrap();
 
     let cost = measure(&g, || {
-        g.client.player_action(&table_id, &actor.address, &Action::Call);
+        g.client.player_action(&table_id, &actor.address, &1u32, &Action::Call);
     });
     check("player_action(Call)", cost, BUDGET_PLAYER_ACTION);
 }
@@ -253,7 +253,7 @@ fn gas_player_action_fold() {
     let actor = table.players.get(table.current_turn).unwrap();
 
     let cost = measure(&g, || {
-        g.client.player_action(&table_id, &actor.address, &Action::Fold);
+        g.client.player_action(&table_id, &actor.address, &1u32, &Action::Fold);
     });
     check("player_action(Fold)", cost, BUDGET_PLAYER_ACTION);
 }
@@ -270,7 +270,7 @@ fn gas_reveal_board() {
     // advance to DealingFlop: SB calls
     let table = g.client.get_table(&table_id);
     let actor = table.players.get(table.current_turn).unwrap();
-    g.client.player_action(&table_id, &actor.address, &Action::Call);
+    g.client.player_action(&table_id, &actor.address, &1u32, &Action::Call);
 
     let cards: Vec<u32> = Vec::from_array(&g.env, [10, 20, 30]);
     let idxs: Vec<u32> = Vec::from_array(&g.env, [4, 5, 6]);
@@ -344,7 +344,7 @@ fn gas_withdraw_rake() {
     // fold to generate rake
     let table = g.client.get_table(&table_id);
     let folder = table.players.get(table.current_turn).unwrap();
-    g.client.player_action(&table_id, &folder.address, &Action::Fold);
+    g.client.player_action(&table_id, &folder.address, &1u32, &Action::Fold);
 
     let cost = measure(&g, || { g.client.withdraw_rake(&table_id); });
     check("withdraw_rake", cost, BUDGET_WITHDRAW_RAKE);

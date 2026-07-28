@@ -300,6 +300,7 @@ pub async fn submit_player_action(
     player_address: &str,
     action: &str,
     amount: Option<i128>,
+    seq: u32,
 ) -> Result<String, String> {
     if !config.is_configured() {
         return Err("Soroban not configured".to_string());
@@ -345,6 +346,8 @@ pub async fn submit_player_action(
             onchain_table_id.to_string(),
             "--player".to_string(),
             player_address.to_string(),
+            "--seq".to_string(),
+            seq.to_string(),
             "--action".to_string(),
             action_json,
         ],
