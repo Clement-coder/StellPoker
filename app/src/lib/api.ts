@@ -502,6 +502,30 @@ export async function requestShowdown(
   return res.json();
 }
 
+export async function requestRunItTwice(
+  tableId: number,
+  optIn: boolean,
+  auth: AuthSigner
+): Promise<{ status: string }> {
+  const res = await authedFetch(
+    `${API_BASE}/api/table/${tableId}/rit-opt-in`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ opt_in: optIn }),
+    },
+    tableId,
+    "rit_opt_in",
+    auth
+  );
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `RIT opt-in failed: ${res.status}`));
+  }
+  return res.json();
+}
+
 export async function playerAction(
   tableId: number,
   action: "fold" | "check" | "call" | "bet" | "raise" | "allin",

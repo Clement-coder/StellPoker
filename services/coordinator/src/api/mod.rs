@@ -224,6 +224,8 @@ pub async fn create_table(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        rit_phase: "inactive".to_string(),
+        rit_shared_board_count: 0,
         mpc_node_progress: Vec::new(),
         mpc_operation_started: None,
     };
@@ -494,6 +496,8 @@ pub async fn request_deal(
             showdown_session_id: None,
             showdown_result: None,
             proof_nonce: 0,
+            rit_phase: "inactive".to_string(),
+            rit_shared_board_count: 0,
             mpc_node_progress: Vec::new(),
             mpc_operation_started: None,
         };
@@ -589,6 +593,8 @@ pub async fn request_deal(
     session.player_card_positions = player_card_positions;
     session.board_indices = Vec::new();
     session.phase = "preflop".to_string();
+    session.rit_phase = "inactive".to_string();
+    session.rit_shared_board_count = 0;
     session.deal_session_id = deal_proof.session_id.clone();
     session.deal_tx_hash = tx_hash.clone();
     session.reveal_tx_hashes = HashMap::new();
@@ -833,7 +839,11 @@ pub async fn request_showdown(
         }));
     }
 
-    if session.phase != "river" && session.phase != "showdown" {
+    if session.phase != "river"
+        && session.phase != "showdown"
+        && session.phase != "showdown_run1"
+        && session.phase != "showdown_run2"
+    {
         return Err(StatusCode::CONFLICT);
     }
 
@@ -850,12 +860,21 @@ pub async fn request_showdown(
         }
     }
 
+    // For Run 2 showdown, the correct board indices are the last 5 elements
+    // of board_indices, because Run 2's reveals include all 5 of its board cards
+    // (shared cards re-revealed + Run 2's new cards) at the end of the sequence.
+    let showdown_board_indices: Vec<u32> = if session.phase == "showdown_run2" && session.board_indices.len() >= 5 {
+        session.board_indices[session.board_indices.len() - 5..].to_vec()
+    } else {
+        session.board_indices.clone()
+    };
+
     let prepared_showdown = mpc::prepare_showdown_from_nodes(
         &state.mpc_client,
         &node_endpoints,
         &state.mpc_config.circuit_dir,
         table_id,
-        &session.board_indices,
+        &showdown_board_indices,
         session.player_order.len() as u32,
         &session.hand_commitments,
         &session.deck_root,
@@ -961,17 +980,47 @@ pub async fn request_showdown(
         }
     };
 
-    session.phase = "settlement".to_string();
-    session.showdown_tx_hash = tx_hash.clone();
-    session.showdown_session_id = Some(showdown_proof.session_id.clone());
-    session.showdown_result = if settled_by_timeout {
-        None
+    let is_rit_run1 = session.phase == "showdown_run1";
+    let is_rit_run2 = session.phase == "showdown_run2";
+
+    if is_rit_run1 {
+        // Run 1 showdown complete — transition to Run 2 dealing
+        session.phase = "preflop".to_string();
+        session.rit_phase = "run2_active".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        // Don't cache showdown_result yet — Run 2 is still coming
+        session.showdown_result = None;
+    } else if is_rit_run2 {
+        // Run 2 showdown complete — full settlement
+        session.phase = "settlement".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        session.showdown_result = if settled_by_timeout {
+            None
+        } else {
+            Some((winner.clone(), parsed_showdown.winner_index))
+        };
     } else {
-        Some((winner.clone(), parsed_showdown.winner_index))
-    };
+        // Normal showdown
+        session.phase = "settlement".to_string();
+        session.showdown_tx_hash = tx_hash.clone();
+        session.showdown_session_id = Some(showdown_proof.session_id.clone());
+        session.showdown_result = if settled_by_timeout {
+            None
+        } else {
+            Some((winner.clone(), parsed_showdown.winner_index))
+        };
+    }
 
     let (status, winner, winner_index) = if settled_by_timeout {
         ("settled_timeout".to_string(), String::new(), 0)
+    } else if is_rit_run1 {
+        (
+            "showdown_run1_complete".to_string(),
+            winner.clone(),
+            parsed_showdown.winner_index,
+        )
     } else {
         (
             "showdown_complete".to_string(),
@@ -990,6 +1039,66 @@ pub async fn request_showdown(
         proof_size: showdown_proof.proof.len(),
         session_id: showdown_proof.session_id,
         tx_hash,
+    }))
+}
+
+/// POST /api/table/{table_id}/rit-opt-in
+///
+/// Opt into or decline Run-It-Twice when heads-up all-in.
+#[utoipa::path(
+    post,
+    path = "/api/table/{table_id}/rit-opt-in",
+    tag = "Tables",
+    request_body = RitOptInRequest,
+    responses(
+        (status = 200, description = "RIT opt-in processed", body = RitOptInResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Unauthorized"),
+        (status = 503, description = "Soroban not configured"),
+    ),
+    security(
+        ("WalletAuth" = [])
+    )
+)]
+pub async fn rit_opt_in(
+    State(state): State<AppState>,
+    Path(table_id): Path<u32>,
+    headers: HeaderMap,
+    Json(req): Json<RitOptInRequest>,
+) -> Result<Json<RitOptInResponse>, StatusCode> {
+    validate_table_id(table_id)?;
+    enforce_rate_limit(&state, &headers, table_id, "rit_opt_in").await?;
+    let auth = validate_signed_request(&state, &headers, table_id, "rit_opt_in", None).await?;
+
+    if !state.soroban_config.is_configured() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    let tx_hash = soroban::submit_rit_opt_in(
+        &state.soroban_config,
+        table_id,
+        &auth.address,
+        req.opt_in,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!(
+            "rit_opt_in failed: table={}, player={}, opt_in={}, err={}",
+            table_id,
+            auth.address,
+            req.opt_in,
+            e
+        );
+        if e.contains("Error(Contract,") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::BAD_GATEWAY
+        }
+    })?;
+
+    Ok(Json(RitOptInResponse {
+        status: "success".to_string(),
+        tx_hash: if tx_hash.is_empty() { None } else { Some(tx_hash) },
     }))
 }
 

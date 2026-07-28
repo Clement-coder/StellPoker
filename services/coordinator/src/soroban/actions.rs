@@ -258,6 +258,42 @@ async fn maybe_auto_advance_betting_if_phase(
 /// Submit a player betting action to the on-chain table contract.
 ///
 /// The source identity is resolved from configured PLAYERn_ADDRESS/PLAYERn_IDENTITY.
+pub async fn submit_rit_opt_in(
+    config: &SorobanConfig,
+    table_id: u32,
+    player_address: &str,
+    opt_in: bool,
+) -> Result<String, String> {
+    if !config.is_configured() {
+        return Err("Soroban not configured".to_string());
+    }
+
+    let source_identity = config.identity_for_player(player_address).ok_or_else(|| {
+        format!(
+            "no local identity configured for player {} (set PLAYERn_ADDRESS/PLAYERn_IDENTITY)",
+            player_address
+        )
+    })?;
+
+    let onchain_table_id = resolve_onchain_table_id(config, table_id);
+    let output = invoke_contract_with_source_retries(
+        config,
+        source_identity,
+        vec![
+            "rit_opt_in".to_string(),
+            "--table_id".to_string(),
+            onchain_table_id.to_string(),
+            "--player".to_string(),
+            player_address.to_string(),
+            "--opt_in".to_string(),
+            opt_in.to_string(),
+        ],
+    )
+    .await?;
+
+    parse_tx_result(output)
+}
+
 pub async fn submit_player_action(
     config: &SorobanConfig,
     table_id: u32,

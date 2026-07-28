@@ -212,6 +212,7 @@ fn build_preflop_state(
         rake_balance: 0,
         action_deadline: 0,
         hand_actions: Vec::new(env),
+        rit_state: None,
     };
 
     // Same blind placement and UTG calculation as the public contract:

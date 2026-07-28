@@ -195,6 +195,17 @@ pub struct LobbySeat {
 }
 
 #[derive(Deserialize, ToSchema)]
+pub struct RitOptInRequest {
+    pub opt_in: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RitOptInResponse {
+    pub status: String,
+    pub tx_hash: Option<String>,
+}
+
+#[derive(Deserialize, ToSchema)]
 pub struct WalletChallengeRequest {
     pub address: String,
 }

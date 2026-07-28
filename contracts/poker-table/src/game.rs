@@ -42,6 +42,7 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     table.dealt_indices = Vec::new(env);
     table.hand_commitments = Vec::new(env);
     table.side_pots = Vec::new(env);
+    table.rit_state = None;
     history::reset_actions(env, table);
 
     // Transition to dealing phase (committee will shuffle + deal)
@@ -243,5 +244,83 @@ pub fn settle_fold_win(env: &Env, table: &mut TableState) -> Result<(), PokerTab
             );
         }
     }
+    Ok(())
+}
+
+/// Settle Run-It-Twice pot split.
+/// The pot is split based on who won each of the two runs:
+/// - Same player wins both → they take the entire pot
+/// - Different winners → split 50/50 (odd chip to earliest seat)
+pub fn settle_rit(env: &Env, table: &mut TableState) -> Result<(), PokerTableError> {
+    let rit = table
+        .rit_state
+        .as_ref()
+        .ok_or(PokerTableError::RunItTwiceNotEnabled)?;
+
+    let total_pot = table.pot;
+    let rake = (total_pot * table.config.rake_bps as i128) / 10_000;
+    let net_pot = total_pot - rake;
+    table.rake_balance += rake;
+
+    let winner1 = rit.run1_winner;
+    let winner2 = rit.run2_winner;
+
+    let mut payouts: Vec<(u32, i128)> = Vec::new(env);
+
+    if constant_time::u32_eq(winner1, winner2) {
+        let mut winner = table
+            .players
+            .get(winner1)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        winner.stack += net_pot;
+        table.players.set(winner1, winner);
+        payouts.push_back((winner1, net_pot));
+    } else {
+        let half = net_pot / 2;
+        let remainder = net_pot % 2;
+
+        let seat1 = core::cmp::min(winner1, winner2);
+        let seat2 = core::cmp::max(winner1, winner2);
+
+        let early_amount = half + remainder;
+        let late_amount = half;
+
+        let mut p1 = table
+            .players
+            .get(seat1)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        p1.stack += early_amount;
+        table.players.set(seat1, p1);
+        payouts.push_back((seat1, early_amount));
+
+        let mut p2 = table
+            .players
+            .get(seat2)
+            .ok_or(PokerTableError::InvalidPlayerIndex)?;
+        p2.stack += late_amount;
+        table.players.set(seat2, p2);
+        payouts.push_back((seat2, late_amount));
+    }
+
+    table.pot = 0;
+    table.phase = GamePhase::Settlement;
+    table.last_action_ledger = env.ledger().sequence();
+
+    history::archive_hand(env, table, &payouts, total_pot, rake, true)?;
+
+    let player1_won = constant_time::u32_eq(winner1, 0) || constant_time::u32_eq(winner2, 0);
+    game_hub::notify_end(env, &table.config.game_hub, table.session_id, player1_won);
+
+    env.events().publish(
+        (Symbol::new(env, "rit_settled"), table.id),
+        (winner1, winner2, net_pot, rake),
+    );
+    if rake > 0 {
+        env.events().publish(
+            (Symbol::new(env, "rake_collected"), table.id),
+            (table.hand_number, rake, table.rake_balance),
+        );
+    }
+
     Ok(())
 }

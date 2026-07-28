@@ -194,6 +194,68 @@ fn find_seat(env: &Env, table: &TableState, player: &Address) -> Result<u32, Pok
     Err(PokerTableError::PlayerNotAtTable)
 }
 
+/// Compute the 5 board indices for each RIT run.
+/// Run 1 uses the next 5 unused positions starting from current dealt_indices.
+/// Run 2 uses the 5 positions after Run 1's.
+fn compute_rit_board_indices(
+    _env: &Env,
+    table: &TableState,
+    rit: &mut RitState,
+) -> Result<(), PokerTableError> {
+    let mut used: [bool; 52] = [false; 52];
+    for i in 0..table.dealt_indices.len() {
+        if let Some(idx) = table.dealt_indices.get(i) {
+            if idx < 52 {
+                used[idx as usize] = true;
+            }
+        }
+    }
+
+    // Find the next 5 unused indices for Run 1
+    let mut run1_indices: [u32; 5] = [0; 5];
+    let mut found: u32 = 0;
+    for idx in 0..52 {
+        if !used[idx] && found < 5 {
+            run1_indices[found as usize] = idx as u32;
+            found += 1;
+            used[idx] = true;
+        }
+    }
+
+    // Find the next 5 unused indices for Run 2
+    let mut run2_indices: [u32; 5] = [0; 5];
+    let mut found: u32 = 0;
+    for idx in 0..52 {
+        if !used[idx] && found < 5 {
+            run2_indices[found as usize] = idx as u32;
+            found += 1;
+            used[idx] = true;
+        }
+    }
+
+    // For shared board cards, replace the first N indices with the actual shared indices
+    let shared_count = rit.shared_board_count as usize;
+    for i in 0..shared_count {
+        if let Some(idx) = table.dealt_indices.get(
+            table.dealt_indices.len() - shared_count as u32 + i as u32,
+        ) {
+            run1_indices[i] = idx;
+            run2_indices[i] = idx;
+        }
+    }
+
+    rit.run1_board_indices = Vec::new(_env);
+    for i in 0..5 {
+        rit.run1_board_indices.push_back(run1_indices[i]);
+    }
+    rit.run2_board_indices = Vec::new(_env);
+    for i in 0..5 {
+        rit.run2_board_indices.push_back(run2_indices[i]);
+    }
+
+    Ok(())
+}
+
 fn derive_session_id(table_id: u32, hand_number: u32) -> u32 {
     // Deterministic 32-bit hash of (table_id, hand_number).
     let mut x = table_id ^ hand_number.rotate_left(16);
@@ -251,6 +313,7 @@ impl PokerTableContract {
             rake_balance: 0,
             action_deadline: 0,
             hand_actions: Vec::new(&env),
+            rit_state: None,
         };
 
         save_table(&env, &table);
@@ -645,6 +708,10 @@ impl PokerTableContract {
         ) {
             return Err(PokerTableError::NotInBettingPhase);
         }
+        // No betting actions during RIT (all players are all-in)
+        if table.rit_state.as_ref().map(|r| r.active).unwrap_or(false) {
+            return Err(PokerTableError::NotInBettingPhase);
+        }
 
         betting::process_action(&env, &mut table, &player, &action)?;
 
@@ -652,7 +719,131 @@ impl PokerTableContract {
         Ok(())
     }
 
+    /// Opt into Run-It-Twice when two players are heads-up all-in.
+    /// Both all-in players must call this with opt_in=true to enable RIT.
+    /// If either player calls with opt_in=false or the phase times out,
+    /// play continues normally.
+    pub fn rit_opt_in(
+        env: Env,
+        table_id: u32,
+        player: Address,
+        opt_in: bool,
+    ) -> Result<(), PokerTableError> {
+        player.require_auth();
+        require_not_paused(&env, table_id)?;
+
+        let mut table = load_table(&env, table_id)?;
+
+        if !matches!(table.phase, GamePhase::AwaitingRunItTwice) {
+            return Err(PokerTableError::NotInRitPhase);
+        }
+        if table.rit_state.is_some() {
+            return Err(PokerTableError::RitAlreadyDecided);
+        }
+
+        let seat = find_seat(&env, &table, &player)?;
+
+        // Verify exactly 2 non-folded all-in players
+        let mut non_folded_all_in: Vec<u32> = Vec::new(&env);
+        for i in 0..table.players.len() {
+            if let Some(p) = table.players.get(i) {
+                if !p.folded && p.all_in {
+                    non_folded_all_in.push_back(p.seat_index);
+                }
+            }
+        }
+        if non_folded_all_in.len() != 2 {
+            return Err(PokerTableError::NotHeadsUpAllIn);
+        }
+
+        let p1_seat = non_folded_all_in.get(0).ok_or(PokerTableError::InvalidPlayerIndex)?;
+        let p2_seat = non_folded_all_in.get(1).ok_or(PokerTableError::InvalidPlayerIndex)?;
+
+        if seat != p1_seat && seat != p2_seat {
+            return Err(PokerTableError::NotHeadsUpAllIn);
+        }
+
+        if !opt_in {
+            // Player declined RIT - continue normally
+            let next_phase = match table.board_cards.len() {
+                0 => GamePhase::DealingFlop,
+                3 => GamePhase::DealingTurn,
+                4 => GamePhase::DealingRiver,
+                _ => GamePhase::Showdown,
+            };
+            table.phase = next_phase;
+            table.last_action_ledger = env.ledger().sequence();
+            table.action_deadline = 0;
+            save_table(&env, &table);
+            env.events().publish(
+                (Symbol::new(&env, "rit_declined"), table_id),
+                (player, seat),
+            );
+            return Ok(());
+        }
+
+        // Player opted in
+        // Initialize or update RIT state
+        let shared_board_count = table.board_cards.len() as u32;
+        let mut rit = RitState {
+            active: false,
+            player1_seat: p1_seat,
+            player2_seat: p2_seat,
+            player1_opted_in: false,
+            player2_opted_in: false,
+            shared_board_count,
+            current_run: 1,
+            run1_board_indices: Vec::new(&env),
+            run2_board_indices: Vec::new(&env),
+            run1_winner: 0,
+            run2_winner: 0,
+        };
+
+        if seat == p1_seat {
+            rit.player1_opted_in = true;
+        } else {
+            rit.player2_opted_in = true;
+        }
+
+        // Check if both have opted in
+        if rit.player1_opted_in && rit.player2_opted_in {
+            rit.active = true;
+            table.rit_state = Some(rit);
+
+            // Pre-compute board indices for both runs
+            let rit_state = table.rit_state.as_mut().unwrap();
+            compute_rit_board_indices(&env, table, rit_state)?;
+
+            // Transition to appropriate dealing phase based on how many shared cards
+            table.phase = match shared_board_count {
+                0 => GamePhase::DealingFlop,
+                3 => GamePhase::DealingTurn,
+                4 => GamePhase::DealingRiver,
+                _ => GamePhase::DealingFlop,
+            };
+            table.last_action_ledger = env.ledger().sequence();
+            table.action_deadline = 0;
+
+            save_table(&env, &table);
+            env.events().publish(
+                (Symbol::new(&env, "rit_activated"), table_id),
+                (p1_seat, p2_seat),
+            );
+        } else {
+            // Waiting for other player
+            table.rit_state = Some(rit);
+            save_table(&env, &table);
+            env.events().publish(
+                (Symbol::new(&env, "rit_opted_in"), table_id),
+                (player, seat),
+            );
+        }
+
+        Ok(())
+    }
+
     /// Committee reveals board cards (flop/turn/river) with proof.
+    /// Handles RIT dual-board reveals when active.
     pub fn reveal_board(
         env: Env,
         table_id: u32,
@@ -694,17 +885,40 @@ impl PokerTableContract {
             return Err(PokerTableError::RevealProofVerificationFailed);
         }
 
-        // Add revealed cards to board.
+        let rit_run = table
+            .rit_state
+            .as_ref()
+            .map(|r| {
+                if r.active {
+                    if r.current_run == 2 {
+                        2u32
+                    } else {
+                        1u32
+                    }
+                } else {
+                    0u32
+                }
+            })
+            .unwrap_or(0);
+
+        // Add revealed cards to board tracking.
         for i in 0..cards.len() {
-            table
-                .board_cards
-                .push_back(cards.get(i).ok_or(PokerTableError::WrongCardCount)?);
-            table
-                .dealt_indices
-                .push_back(indices.get(i).ok_or(PokerTableError::WrongCardCount)?);
+            let card = cards.get(i).ok_or(PokerTableError::WrongCardCount)?;
+            let idx = indices.get(i).ok_or(PokerTableError::WrongCardCount)?;
+
+            // Always track in dealt_indices for circuit consistency
+            table.dealt_indices.push_back(idx);
+
+            // Track in board_cards (both runs get their board here)
+            table.board_cards.push_back(card);
+            if let Some(ref mut rit) = table.rit_state {
+                if rit.active && rit_run == 1 {
+                    rit.run1_board_indices.push_back(idx);
+                }
+            }
         }
 
-        // Transition to next betting phase.
+        // Transition to next phase (standard phases for both runs).
         table.phase = match table.phase {
             GamePhase::DealingFlop => GamePhase::Flop,
             GamePhase::DealingTurn => GamePhase::Turn,
@@ -727,6 +941,7 @@ impl PokerTableContract {
     }
 
     /// Submit showdown: reveal hole cards, verify winner, settle.
+    /// Handles Run-It-Twice showdowns for both runs when active.
     pub fn submit_showdown(
         env: Env,
         table_id: u32,
@@ -741,31 +956,55 @@ impl PokerTableContract {
 
         let mut table = load_table(&env, table_id)?;
 
-        if !matches!(table.phase, GamePhase::Showdown) {
+        let is_rit_run1 = matches!(table.phase, GamePhase::ShowdownRun1);
+        let is_rit_run2 = matches!(table.phase, GamePhase::ShowdownRun2);
+        let is_normal = matches!(table.phase, GamePhase::Showdown);
+
+        if !is_normal && !is_rit_run1 && !is_rit_run2 {
             return Err(PokerTableError::NotInShowdownPhase);
         }
         if constant_time::address_ne(&env, &committee, &table.committee) {
             return Err(PokerTableError::NotAuthorizedCommittee);
         }
 
-        // Extract board_indices from dealt_indices (last 5 elements after all reveals).
-        if table.dealt_indices.len() < BOARD_INDICES_COUNT {
+        // Extract board indices based on which run we're proving
+        let board_indices: Vec<u32> = if is_rit_run1 {
+            // Use Run 1's pre-computed board indices
+            table
+                .rit_state
+                .as_ref()
+                .map(|r| r.run1_board_indices.clone())
+                .ok_or(PokerTableError::BoardNotComplete)?
+        } else if is_rit_run2 {
+            // Use Run 2's pre-computed board indices
+            table
+                .rit_state
+                .as_ref()
+                .map(|r| r.run2_board_indices.clone())
+                .ok_or(PokerTableError::BoardNotComplete)?
+        } else {
+            // Normal: extract last 5 board indices from dealt_indices
+            if table.dealt_indices.len() < BOARD_INDICES_COUNT {
+                return Err(PokerTableError::BoardNotComplete);
+            }
+            let board_start = table.dealt_indices.len() - BOARD_INDICES_COUNT;
+            let mut indices: Vec<u32> = Vec::new(&env);
+            for i in board_start..table.dealt_indices.len() {
+                indices.push_back(
+                    table
+                        .dealt_indices
+                        .get(i)
+                        .ok_or(PokerTableError::BoardNotComplete)?,
+                );
+            }
+            indices
+        };
+
+        if board_indices.len() != 5 {
             return Err(PokerTableError::BoardNotComplete);
-        }
-        let board_start = table.dealt_indices.len() - BOARD_INDICES_COUNT;
-        let mut board_indices: Vec<u32> = Vec::new(&env);
-        for i in board_start..table.dealt_indices.len() {
-            board_indices.push_back(
-                table
-                    .dealt_indices
-                    .get(i)
-                    .ok_or(PokerTableError::BoardNotComplete)?,
-            );
         }
 
         // Verify showdown proof via zk-verifier.
-        // The verifier now validates that hand_commitments, board_indices, and
-        // deck_root in the public_inputs match the on-chain state.
         let verifier_client = verifier::ZkVerifierClient::new(&env, &table.config.verifier);
         if !verifier_client.verify_showdown(
             &proof,
@@ -777,24 +1016,61 @@ impl PokerTableContract {
             return Err(PokerTableError::ShowdownProofVerificationFailed);
         }
 
-        // Extract the winner_index from the proof's public outputs (field 25).
-        // The circuit proved this winner; we use it for payout instead of
-        // re-evaluating hands on-chain.
         let winner_index = extract_u32_from_public_inputs(&public_inputs, 25);
         let tie_mask = extract_u32_from_public_inputs(&public_inputs, 26);
 
-        // Verify that the committee-submitted hole_cards match the proof outputs.
-        // Hole cards from the proof are seat-indexed (field 13..19 for hole_card1,
-        // field 19..25 for hole_card2).  Submitted hole_cards are in active-player
-        // order (seat order, skipping folded).
         verify_hole_cards_against_proof(&env, &table, &public_inputs, &hole_cards)?;
 
-        // Settle using the proved winner and optional tie mask from the proof
-        // (not re-evaluating hands on-chain).
-        game::settle_showdown(&env, &mut table, winner_index, tie_mask)?;
+        if is_rit_run1 {
+            // Record Run 1 winner, then transition to Run 2 dealing
+            if let Some(ref mut rit) = table.rit_state {
+                rit.run1_winner = winner_index;
+                rit.current_run = 2;
+            }
+            // Reset board_cards to shared cards only for Run 2 reveals
+            let shared_count = table
+                .rit_state
+                .as_ref()
+                .map(|r| r.shared_board_count)
+                .unwrap_or(0) as u32;
+            let mut shared: Vec<u32> = Vec::new(&env);
+            for i in 0..shared_count {
+                if let Some(card) = table.board_cards.get(i) {
+                    shared.push_back(card);
+                }
+            }
+            table.board_cards = shared;
 
-        save_table(&env, &table);
-        Ok(())
+            table.phase = GamePhase::DealingFlop;
+            table.last_action_ledger = env.ledger().sequence();
+            table.action_deadline = 0;
+            save_table(&env, &table);
+            env.events().publish(
+                (Symbol::new(&env, "showdown_run1"), table_id),
+                (winner_index, tie_mask),
+            );
+            Ok(())
+        } else if is_rit_run2 {
+            // Record Run 2 winner, then go to RIT settlement
+            if let Some(ref mut rit) = table.rit_state {
+                rit.run2_winner = winner_index;
+            }
+            table.phase = GamePhase::RitSettlement;
+            table.last_action_ledger = env.ledger().sequence();
+            // Settle RIT pot split
+            game::settle_rit(&env, &mut table)?;
+            save_table(&env, &table);
+            env.events().publish(
+                (Symbol::new(&env, "showdown_run2"), table_id),
+                (winner_index, tie_mask),
+            );
+            Ok(())
+        } else {
+            // Normal showdown
+            game::settle_showdown(&env, &mut table, winner_index, tie_mask)?;
+            save_table(&env, &table);
+            Ok(())
+        }
     }
 
     /// Claim timeout when opponent or committee is stalling.

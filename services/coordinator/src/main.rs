@@ -148,6 +148,7 @@ struct HealthResponse {
         api::request_reveal,
         api::request_showdown,
         api::player_action,
+        api::rit_opt_in,
         api::get_player_cards,
         api::get_table_state,
         api::get_mpc_status,
@@ -214,6 +215,8 @@ struct HealthResponse {
         api::types::WalletChallengeResponse,
         api::types::WalletVerifyRequest,
         api::types::WalletVerifyResponse,
+        api::types::RitOptInRequest,
+        api::types::RitOptInResponse,
         api::types::MpcNodeProgress,
         api::types::TableMpcStatusResponse,
     )),
@@ -355,6 +358,12 @@ struct TableSession {
     showdown_session_id: Option<String>,
     /// Cached showdown result for idempotent retries.
     showdown_result: Option<(String, u32)>,
+    /// Run-It-Twice tracking: "inactive" or "run2_active".
+    rit_phase: String,
+    /// Number of shared board cards when RIT was activated (0=preflop, 3=flop, 4=turn).
+    /// Set once from on-chain state during Run 1 showdown; used for Run 2 board computation.
+    #[serde(default)]
+    rit_shared_board_count: u32,
     /// Monotonic nonce for unique proof session IDs.
     proof_nonce: u64,
     /// Per-node MPC phase progress for the current operation.
@@ -825,6 +834,10 @@ async fn main() {
         .route(
             "/api/table/:table_id/player-action",
             post(api::player_action),
+        )
+        .route(
+            "/api/table/:table_id/rit-opt-in",
+            post(api::rit_opt_in),
         )
         .route(
             "/api/table/:table_id/player/:address/cards",
