@@ -453,6 +453,7 @@ pub async fn request_deal(
 ) -> Result<Json<DealResponse>, StatusCode> {
     validate_table_id(table_id)?;
     enforce_rate_limit(&state, &headers, table_id, "request_deal").await?;
+    rate_limit::check_table_session_cap(&state.mpc_sessions, table_id).await?;
 
     let players = if req.players.is_empty() {
         resolve_deal_players_from_lobby(&state, table_id).await?
@@ -674,6 +675,7 @@ pub async fn request_reveal(
 
     let action = format!("request_reveal:{}", phase);
     enforce_rate_limit(&state, &headers, table_id, &action).await?;
+    rate_limit::check_table_session_cap(&state.mpc_sessions, table_id).await?;
 
     ensure_session_exists(&state, table_id).await?;
 
@@ -873,6 +875,7 @@ pub async fn request_showdown(
     validate_table_id(table_id)?;
 
     enforce_rate_limit(&state, &headers, table_id, "request_showdown").await?;
+    rate_limit::check_table_session_cap(&state.mpc_sessions, table_id).await?;
 
     ensure_session_exists(&state, table_id).await?;
 
