@@ -70,6 +70,7 @@ mod session_gc;
 mod session_migration;
 mod soroban;
 mod stats;
+mod telemetry;
 mod tls_client;
 mod tournament;
 
@@ -401,13 +402,10 @@ struct RateLimitState {
 
 #[tokio::main]
 async fn main() {
-    // Structured logging: REQUEST_LOG_FORMAT=json uses JSON output; default is human-readable.
-    let log_format = std::env::var("REQUEST_LOG_FORMAT").unwrap_or_default();
-    if log_format.eq_ignore_ascii_case("json") {
-        tracing_subscriber::fmt().json().init();
-    } else {
-        tracing_subscriber::fmt().init();
-    }
+    // Initialise tracing + optional OpenTelemetry OTLP pipeline.
+    // The guard must stay alive for the duration of the process — dropping it
+    // flushes all pending spans to the exporter.
+    let _otel_guard = telemetry::init_tracer();
 
     let enc_key =
         crypto::EncryptionKey::from_env().unwrap_or_else(|_| crypto::EncryptionKey::ephemeral());

@@ -514,6 +514,15 @@ pub async fn request_deal(
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
 
+    let deal_span = tracing::info_span!(
+        "mpc.deal",
+        table_id = table_id,
+        player_count = players.len(),
+        circuit = tracing::field::Empty,
+        proof_session_id = tracing::field::Empty,
+    );
+    let _deal_span_guard = deal_span.enter();
+
     let prepared_deal = mpc::prepare_deal_from_nodes(
         &state.mpc_client,
         &node_endpoints,
@@ -538,6 +547,8 @@ pub async fn request_deal(
     }
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let deal_circuit = parameterised_circuit_name(&req.circuit_name, players.len());
+    deal_span.record("circuit", deal_circuit.as_str());
+    deal_span.record("proof_session_id", proof_session_id.as_str());
     let deal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
@@ -758,6 +769,15 @@ pub async fn request_reveal(
         }
     }
 
+    let reveal_span = tracing::info_span!(
+        "mpc.reveal",
+        table_id = table_id,
+        phase = %phase,
+        circuit = "reveal_board_valid",
+        proof_session_id = tracing::field::Empty,
+    );
+    let _reveal_span_guard = reveal_span.enter();
+
     let prepared_reveal = mpc::prepare_reveal_from_nodes(
         &state.mpc_client,
         &node_endpoints,
@@ -782,6 +802,7 @@ pub async fn request_reveal(
             return Err(StatusCode::CONFLICT);
         }
     }
+    reveal_span.record("proof_session_id", proof_session_id.as_str());
     let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let reveal_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
@@ -941,6 +962,15 @@ pub async fn request_showdown(
         session.board_indices.clone()
     };
 
+    let showdown_span = tracing::info_span!(
+        "mpc.showdown",
+        table_id = table_id,
+        player_count = session.player_order.len(),
+        circuit = tracing::field::Empty,
+        proof_session_id = tracing::field::Empty,
+    );
+    let _showdown_span_guard = showdown_span.enter();
+
     let prepared_showdown = mpc::prepare_showdown_from_nodes(
         &state.mpc_client,
         &node_endpoints,
@@ -966,9 +996,11 @@ pub async fn request_showdown(
             return Err(StatusCode::CONFLICT);
         }
     }
-    let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let showdown_circuit =
         parameterised_circuit_name("showdown_valid", session.player_order.len());
+    showdown_span.record("circuit", showdown_circuit.as_str());
+    showdown_span.record("proof_session_id", proof_session_id.as_str());
+    let _guard = SessionGuard::new(state.metrics.active_mpc_sessions.clone());
     let showdown_proof = mpc::generate_proof_from_share_sets(
         &state.mpc_client,
         table_id,
