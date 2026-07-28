@@ -21,6 +21,7 @@ import {
 import { useWalletMonitor } from "@/lib/use-wallet-monitor";
 import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
+import { HandReplayer } from "./HandReplayer";
 import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
 import { TableTabs } from "./TableTabs";
@@ -45,6 +46,9 @@ import {
   useTurnNotification,
   requestPermissionOnJoin,
 } from "@/lib/use-notifications";
+import { useTutorial } from "@/lib/use-tutorial";
+import { TutorialOverlay, TutorialHelpButton } from "./TutorialOverlay";
+import { playSound } from "@/lib/sound-engine";
 
 type ActiveRequest = "deal" | "flop" | "turn" | "river" | "showdown" | null;
 type PlayMode = "single" | "headsup" | "multi";
@@ -156,6 +160,47 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
   // Issue #47: browser notification + sound when it becomes the user's turn.
   useTurnNotification({ isMyTurn, tableName: `Table #${tableId}` });
+
+  // Issue #61: tutorial overlay for new players.
+  const tutorial = useTutorial();
+
+  // Issue #63: sound effects
+  // Ref to track the previous phase so we only fire on transitions.
+  const prevPhaseRef = useRef<string>("");
+  const prevBoardCountRef = useRef<number>(0);
+  const prevWinnerRef = useRef<string | null>(null);
+
+  // Card shuffle when deal starts (waiting → preflop)
+  useEffect(() => {
+    const phase = game.phase;
+    if (prevPhaseRef.current !== phase) {
+      if (phase === "preflop" && prevPhaseRef.current === "waiting") {
+        void playSound("shuffle");
+      }
+      prevPhaseRef.current = phase;
+    }
+  }, [game.phase]);
+
+  // Card flip when community cards are revealed (board grows)
+  useEffect(() => {
+    const count = game.boardCards.length;
+    if (count > prevBoardCountRef.current) {
+      // Stagger one flip sound per new card
+      const newCards = count - prevBoardCountRef.current;
+      for (let i = 0; i < newCards; i++) {
+        setTimeout(() => void playSound("flip"), i * 110);
+      }
+    }
+    prevBoardCountRef.current = count;
+  }, [game.boardCards.length]);
+
+  // Winner celebration when a winner is determined
+  useEffect(() => {
+    if (winnerAddress && winnerAddress !== prevWinnerRef.current) {
+      void playSound("winner");
+    }
+    prevWinnerRef.current = winnerAddress;
+  }, [winnerAddress]);
 
   const isWalletSeated = !!wallet && !!userPlayer;
   const seatedAddresses = game.players
@@ -862,6 +907,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             >
               {t("nav.keys")}
             </button>
+            <TutorialHelpButton onClick={tutorial.open} />
             <ThemeSelector />
             <LanguageSelector variant="header" />
           </div>
@@ -1066,7 +1112,13 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   myBet={displayMyBet}
                   myStack={displayMyStack}
                   pot={displayPot}
-                  onAction={handleAction}
+                  onAction={(action, amount) => {
+                    // Issue #63: chip sound on bet/raise/call/allin
+                    if (["bet", "raise", "call", "allin"].includes(action)) {
+                      void playSound("chip");
+                    }
+                    return handleAction(action, amount);
+                  }}
                   onChainConfirmed={game.onChainConfirmed}
                   canStartHand={canStartHand}
                   canResolveShowdown={!!wallet}
@@ -1175,6 +1227,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         entries={historyEntries}
+        onReplay={(entry) => setReplayEntry(entry)}
       />
 
       {/* Issue #53 — collapsible multi-table overview */}
@@ -1390,6 +1443,26 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           }}
         />
       )}
+
+      {/* Issue #62: Hand replayer */}
+      <HandReplayer
+        entry={replayEntry}
+        onClose={() => setReplayEntry(null)}
+      />
+
+      {/* Issue #61: Tutorial overlay */}
+      <TutorialOverlay
+        isOpen={tutorial.isOpen}
+        currentStep={tutorial.currentStep}
+        currentIndex={tutorial.currentIndex}
+        totalSteps={tutorial.totalSteps}
+        isLastStep={tutorial.isLastStep}
+        isFirstStep={tutorial.isFirstStep}
+        onClose={tutorial.close}
+        onNext={tutorial.next}
+        onPrev={tutorial.prev}
+        onGoTo={tutorial.goTo}
+      />
     </PixelWorld>
   );
 }
