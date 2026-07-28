@@ -489,6 +489,7 @@ mod pot_test {
             rake_balance: 0,
             action_deadline: 0,
             hand_actions: Vec::new(env),
+            rit_state: None,
             jackpot_balance: 0,
             last_raise_size: 0,
         }

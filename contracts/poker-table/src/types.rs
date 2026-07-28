@@ -84,6 +84,12 @@ pub enum PokerTableError {
     CannotRebuyDuringActiveHand = 42,
     RebuyLimitReached = 43,
     InvalidRebuyAmount = 44,
+    NotInRitPhase = 45,
+    RitAlreadyDecided = 46,
+    NotHeadsUpAllIn = 47,
+    RunItTwiceNotEnabled = 48,
+    RitAlreadyActive = 49,
+    BoardAlreadyRevealedForRun = 50,
     JackpotNotConfigured = 45,
     BadBeatHandDataInvalid = 46,
 }
@@ -125,6 +131,11 @@ pub enum GamePhase {
     Showdown,     // Revealing hands and determining winner
     Settlement,   // Pot distributed, ready for next hand
     Dispute,      // Something went wrong; funds frozen
+    // Run-It-Twice phases
+    AwaitingRunItTwice, // Waiting for all-in players to decide on RIT
+    ShowdownRun1,     // First run's showdown
+    ShowdownRun2,     // Second run's showdown
+    RitSettlement,    // Pot split between two runs
 }
 
 #[contracttype]
@@ -143,6 +154,32 @@ pub enum Action {
 pub struct SidePot {
     pub amount: i128,
     pub eligible_players: Vec<u32>, // seat indices
+}
+
+/// State tracking for Run-It-Twice when two players are all-in heads-up.
+/// RIT deals the remaining board twice and splits the pot based on wins.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RitState {
+    pub active: bool,
+    /// Seat indices of the two all-in players who opted in
+    pub player1_seat: u32,
+    pub player2_seat: u32,
+    pub player1_opted_in: bool,
+    pub player2_opted_in: bool,
+    /// Number of board cards already revealed before RIT was activated
+    /// (0 = preflop, 3 = flop, 4 = turn)
+    pub shared_board_count: u32,
+    /// Which run we're currently dealing (0 = not started, 1 or 2)
+    pub current_run: u32,
+    /// Deck indices for Run 1's full 5-card board (shared + remaining)
+    pub run1_board_indices: Vec<u32>,
+    /// Deck indices for Run 2's full 5-card board (shared + run2 remaining)
+    pub run2_board_indices: Vec<u32>,
+    /// Winner seat for Run 1
+    pub run1_winner: u32,
+    /// Winner seat for Run 2
+    pub run2_winner: u32,
 }
 
 /// The kind of a betting action, without its amount. Stored in hand history
@@ -246,6 +283,8 @@ pub struct TableState {
     /// Betting actions taken so far in the current hand. Cleared when a hand
     /// starts and archived into the hand-history buffer when it settles.
     pub hand_actions: Vec<ActionRecord>,
+    /// Run-It-Twice state when two players are all-in heads-up.
+    pub rit_state: Option<RitState>,
     /// Size of the last bet or raise in the current betting round.
     /// The next raise must be at least this large (standard poker minimum-raise
     /// rule). Cleared to `big_blind` when a new betting round begins.

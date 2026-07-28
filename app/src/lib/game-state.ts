@@ -6,7 +6,11 @@ export type GamePhase =
   | "turn"
   | "river"
   | "showdown"
-  | "settlement";
+  | "settlement"
+  | "awaiting_run_it_twice"
+  | "showdown_run1"
+  | "showdown_run2"
+  | "rit_settlement";
 
 export interface Player {
   address: string;
@@ -18,18 +22,34 @@ export interface Player {
   cards?: [number, number];
 }
 
+export interface RitState {
+  active: boolean;
+  player1Seat: number;
+  player2Seat: number;
+  player1OptedIn: boolean;
+  player2OptedIn: boolean;
+  sharedBoardCount: number;
+  currentRun: number;
+  run1BoardIndices: number[];
+  run2BoardIndices: number[];
+  run1Winner: number;
+  run2Winner: number;
+}
+
 export interface GameState {
   tableId: number;
   phase: GamePhase;
   players: Player[];
   pot: number;
   boardCards: number[];
+  boardCardsRun2?: number[];
   currentTurn: number;
   dealerSeat: number;
   handNumber: number;
   lastTxHash?: string;
   proofSize?: number;
   onChainConfirmed: boolean;
+  ritState?: RitState;
 }
 
 export function createInitialState(tableId: number): GameState {

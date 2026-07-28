@@ -215,6 +215,7 @@ fn build_preflop_state(
         rake_balance: 0,
         action_deadline: 0,
         hand_actions: Vec::new(env),
+        rit_state: None,
         jackpot_balance: 0,
         last_raise_size: big_blind,
     };
