@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { Card } from "./Card";
 import { stellarExpertUrl } from "@/lib/explorer";
+import { replayUrl } from "@/lib/replay";
 import type { HandHistoryEntry, Street } from "@/lib/hand-history";
 
 interface HandHistoryPanelProps {
@@ -167,6 +169,13 @@ export function HandHistoryPanel({ open, onClose, entries, onReplay }: HandHisto
                   VIEW PROOF TX ↗
                 </a>
               )}
+              <Link
+                href={replayUrl(entry.tableId, entry.handNumber)}
+                className="text-[8px] block mt-1"
+                style={{ color: "#3498db", textDecoration: "none" }}
+              >
+                ▶ REPLAY HAND ↗
+              </Link>
             </div>
           ))}
         </div>
