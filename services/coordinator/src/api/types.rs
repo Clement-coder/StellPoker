@@ -69,6 +69,9 @@ pub struct ShowdownResponse {
 pub struct PlayerActionRequest {
     pub action: String,
     pub amount: Option<i128>,
+    /// Monotonically increasing sequence number for (player, table).
+    /// Prevents replay / front-running attacks on betting actions.
+    pub seq: u32,
 }
 
 #[derive(Serialize, ToSchema)]

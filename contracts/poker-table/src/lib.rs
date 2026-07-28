@@ -695,14 +695,38 @@ impl PokerTableContract {
     }
 
     /// Player submits a betting action.
+    ///
+    /// `seq`: monotonically increasing per-player per-table sequence number.
+    /// The contract rejects any action whose `seq` is not exactly one greater
+    /// than the previously accepted action for `(table_id, player)`.
+    /// This prevents front-running and replay attacks on betting actions.
     pub fn player_action(
         env: Env,
         table_id: u32,
         player: Address,
+        seq: u32,
         action: Action,
     ) -> Result<(), PokerTableError> {
         player.require_auth();
         require_not_paused(&env, table_id)?;
+
+        // Validate action sequence number to prevent replay/stale attacks.
+        let counter_key = DataKey::PlayerActionCounter(table_id, player.clone());
+        let last_seq: u32 = env
+            .storage()
+            .persistent()
+            .get(&counter_key)
+            .unwrap_or(0);
+        if seq != last_seq.wrapping_add(1) {
+            return Err(PokerTableError::StaleActionSequence);
+        }
+        // Bump counter and extend TTL.
+        env.storage()
+            .persistent()
+            .set(&counter_key, &seq);
+        env.storage()
+            .persistent()
+            .extend_ttl(&counter_key, TABLE_TTL_THRESHOLD, TABLE_TTL_EXTEND);
 
         let mut table = load_table(&env, table_id)?;
 

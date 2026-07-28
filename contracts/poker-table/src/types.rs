@@ -90,8 +90,9 @@ pub enum PokerTableError {
     RunItTwiceNotEnabled = 48,
     RitAlreadyActive = 49,
     BoardAlreadyRevealedForRun = 50,
-    JackpotNotConfigured = 45,
-    BadBeatHandDataInvalid = 46,
+    JackpotNotConfigured = 51,
+    BadBeatHandDataInvalid = 52,
+    StaleActionSequence = 53,
 }
 
 #[contracttype]
@@ -302,4 +303,7 @@ pub enum DataKey {
     HandHistoryMeta(u32),
     /// Tables a wallet is currently seated at, for multi-table clients.
     PlayerTables(Address),
+    /// Per-player per-table monotonically increasing action sequence counter.
+    /// Used to reject stale or replayed betting actions.
+    PlayerActionCounter(u32, Address),
 }

@@ -1189,6 +1189,7 @@ pub async fn player_action(
         &player_address,
         &normalized,
         amount,
+        req.seq,
     )
     .await
     .map_err(|e| {
