@@ -59,6 +59,23 @@ pub fn process_timeout(
             }
         }
 
+        // RIT decision timeout — default to normal play (no RIT)
+        GamePhase::AwaitingRunItTwice => {
+            // Transition to the next normal phase as if RIT was declined
+            table.phase = match table.board_cards.len() {
+                0 => GamePhase::DealingFlop,
+                3 => GamePhase::DealingTurn,
+                4 => GamePhase::DealingRiver,
+                _ => GamePhase::Showdown,
+            };
+            table.last_action_ledger = current_ledger;
+            table.action_deadline = 0;
+            env.events().publish(
+                (Symbol::new(env, "rit_timeout"), table.id),
+                (),
+            );
+        }
+
         // Committee timeout during dealing/reveal — dispute, return funds
         GamePhase::Dealing
         | GamePhase::DealingFlop

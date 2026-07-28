@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card } from "./Card";
 import { PixelCat, opponentSprite } from "./PixelCat";
-import { PixelChip } from "./PixelChip";
+import { PixelChip, AnimatedChipCounter } from "./PixelChip";
 import { Identicon } from "./Identicon";
 import type { Player } from "@/lib/game-state";
 import { classifyHandStrength } from "@/lib/hand-strength";
@@ -264,7 +264,7 @@ export function PlayerSeat({
               color: '#27ae60',
               textShadow: '1px 1px 0 rgba(0,0,0,0.4)',
             }}>
-              {player.stack.toLocaleString()} {t("seat.chips")}
+              <AnimatedChipCounter value={player.stack} suffix={` ${t("seat.chips")}`} />
             </span>
           </div>
 
@@ -278,7 +278,7 @@ export function PlayerSeat({
             >
               <PixelChip color="gold" size={1} />
               <span className="text-[9px]" style={{ color: '#f1c40f' }}>
-                {t("seat.bet")}: {player.betThisRound.toLocaleString()}
+                {t("seat.bet")}: <AnimatedChipCounter value={player.betThisRound} />
               </span>
             </div>
           )}

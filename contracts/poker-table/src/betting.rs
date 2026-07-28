@@ -82,6 +82,7 @@ pub fn process_action(
             p.bet_this_round += *amount;
             p.committed += *amount;
             table.pot += *amount;
+            table.last_raise_size = *amount;
 
             if p.stack == 0 {
                 p.all_in = true;
@@ -91,7 +92,10 @@ pub fn process_action(
         Action::Raise(amount) => {
             let to_call = current_bet - p.bet_this_round;
             let total_needed = to_call + *amount;
-            if *amount < table.config.big_blind {
+            // Standard poker minimum-raise rule: the raise increment must be at
+            // least as large as the previous bet or raise in this round.
+            let min_raise = core::cmp::max(table.last_raise_size, table.config.big_blind);
+            if *amount < min_raise {
                 return Err(PokerTableError::RaiseTooSmall);
             }
             if total_needed > p.stack {
@@ -102,6 +106,7 @@ pub fn process_action(
             p.bet_this_round += total_needed;
             p.committed += total_needed;
             table.pot += total_needed;
+            table.last_raise_size = *amount;
 
             if p.stack == 0 {
                 p.all_in = true;
@@ -163,6 +168,9 @@ pub fn reset_round(env: &Env, table: &mut TableState) -> Result<(), PokerTableEr
         p.bet_this_round = 0;
         table.players.set(i, p);
     }
+
+    // Reset minimum raise size to one big blind for the new betting round.
+    table.last_raise_size = table.config.big_blind;
 
     // First active player after dealer acts first post-flop
     let num_players = table.players.len() as u32;
@@ -235,12 +243,80 @@ fn is_round_complete(table: &TableState) -> Result<bool, PokerTableError> {
     Ok(true)
 }
 
-/// Advance to the next game phase.
+/// Check if exactly 2 non-folded players are both all-in (heads-up all-in).
+fn is_heads_up_all_in(table: &TableState) -> bool {
+    let mut non_folded: u32 = 0;
+    let mut all_in_count: u32 = 0;
+    for i in 0..table.players.len() {
+        if let Some(p) = table.players.get(i) {
+            if !p.folded {
+                non_folded += 1;
+                if p.all_in {
+                    all_in_count += 1;
+                }
+            }
+        }
+    }
+    non_folded == 2 && all_in_count == 2
+}
+
+/// Advance to the next game phase, checking for Run-It-Twice condition.
 fn advance_to_next_phase(env: &Env, table: &mut TableState) -> Result<(), PokerTableError> {
     // If only one player left, settle immediately
     if game::active_player_count(table) == 1 {
         game::settle_fold_win(env, table)?;
         return Ok(());
+    }
+
+    // Check for RIT condition: 2 players heads-up both all-in, RIT not yet decided
+    if table.rit_state.is_none()
+        && is_heads_up_all_in(table)
+        && !matches!(table.phase, GamePhase::River)
+    {
+        table.phase = GamePhase::AwaitingRunItTwice;
+        table.last_action_ledger = env.ledger().sequence();
+        // No action deadline during RIT decision (committee phases)
+        table.action_deadline = 0;
+        env.events().publish(
+            (Symbol::new(env, "phase_change"), table.id),
+            table.phase.clone(),
+        );
+        return Ok(());
+    }
+
+    // If RIT is active, handle special phase transitions
+    if let Some(ref rit) = table.rit_state {
+        if rit.active {
+            if matches!(table.phase, GamePhase::River) {
+                // River completes -> go to appropriate showdown phase
+                table.phase = if rit.current_run == 2 {
+                    GamePhase::ShowdownRun2
+                } else {
+                    GamePhase::ShowdownRun1
+                };
+                table.last_action_ledger = env.ledger().sequence();
+                table.action_deadline = 0;
+                env.events().publish(
+                    (Symbol::new(env, "phase_change"), table.id),
+                    table.phase.clone(),
+                );
+                return Ok(());
+            }
+            // For RIT phases, skip betting (all-in) and go straight to next deal
+            table.phase = match table.phase {
+                GamePhase::Preflop => GamePhase::DealingFlop,
+                GamePhase::Flop => GamePhase::DealingTurn,
+                GamePhase::Turn => GamePhase::DealingRiver,
+                _ => return Ok(()),
+            };
+            table.last_action_ledger = env.ledger().sequence();
+            table.action_deadline = 0;
+            env.events().publish(
+                (Symbol::new(env, "phase_change"), table.id),
+                table.phase.clone(),
+            );
+            return Ok(());
+        }
     }
 
     table.phase = match table.phase {

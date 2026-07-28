@@ -1,13 +1,17 @@
 "use client";
 
+import Link from "next/link";
 import { Card } from "./Card";
 import { stellarExpertUrl } from "@/lib/explorer";
+import { replayUrl } from "@/lib/replay";
 import type { HandHistoryEntry, Street } from "@/lib/hand-history";
 
 interface HandHistoryPanelProps {
   open: boolean;
   onClose: () => void;
   entries: HandHistoryEntry[];
+  /** Called when the user wants to replay a specific hand. */
+  onReplay?: (entry: HandHistoryEntry) => void;
 }
 
 function shortAddress(address: string): string {
@@ -21,7 +25,7 @@ const STREET_LABEL: Record<Street, string> = {
   river: "RIVER",
 };
 
-export function HandHistoryPanel({ open, onClose, entries }: HandHistoryPanelProps) {
+export function HandHistoryPanel({ open, onClose, entries, onReplay }: HandHistoryPanelProps) {
   if (!open) return null;
 
   return (
@@ -70,13 +74,46 @@ export function HandHistoryPanel({ open, onClose, entries }: HandHistoryPanelPro
               className="pixel-border-thin"
               style={{ padding: "8px", background: "rgba(255,255,255,0.03)" }}
             >
+              {/* Header row: hand number + time + replay button */}
               <div className="flex items-center justify-between">
                 <span className="text-[9px]" style={{ color: "#f1c40f" }}>
                   HAND #{entry.handNumber}
                 </span>
-                <span className="text-[8px]" style={{ color: "#7f8c8d" }}>
-                  {new Date(entry.timestamp).toLocaleTimeString()}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[8px]" style={{ color: "#7f8c8d" }}>
+                    {new Date(entry.timestamp).toLocaleTimeString()}
+                  </span>
+                  {onReplay && entry.streets.length > 0 && (
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onReplay(entry);
+                      }}
+                      title="Replay this hand"
+                      style={{
+                        fontFamily: "'Press Start 2P', monospace",
+                        fontSize: "7px",
+                        background: "rgba(196,125,46,0.15)",
+                        border: "1px solid #c47d2e",
+                        color: "#ffc078",
+                        cursor: "pointer",
+                        padding: "2px 6px",
+                        lineHeight: 1.4,
+                        transition: "background 0.15s",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = "rgba(196,125,46,0.3)";
+                        e.currentTarget.style.color = "#f1c40f";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = "rgba(196,125,46,0.15)";
+                        e.currentTarget.style.color = "#ffc078";
+                      }}
+                    >
+                      ▶ REPLAY
+                    </button>
+                  )}
+                </div>
               </div>
 
               {entry.streets.length > 0 && (
@@ -132,6 +169,13 @@ export function HandHistoryPanel({ open, onClose, entries }: HandHistoryPanelPro
                   VIEW PROOF TX ↗
                 </a>
               )}
+              <Link
+                href={replayUrl(entry.tableId, entry.handNumber)}
+                className="text-[8px] block mt-1"
+                style={{ color: "#3498db", textDecoration: "none" }}
+              >
+                ▶ REPLAY HAND ↗
+              </Link>
             </div>
           ))}
         </div>

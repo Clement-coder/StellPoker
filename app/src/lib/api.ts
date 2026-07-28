@@ -353,18 +353,23 @@ export async function createTable(
   auth: AuthSigner,
   maxPlayers: number,
   solo = false,
-  buyIn?: string
+  buyIn?: string,
+  token?: string | undefined
 ): Promise<CreateTableResponse> {
   const payload: {
     max_players: number;
     solo: boolean;
     buy_in?: string;
+    token?: string | null;
   } = {
     max_players: maxPlayers,
     solo,
   };
   if (buyIn) {
     payload.buy_in = buyIn;
+  }
+  if (token) {
+    payload.token = token;
   }
 
   const res = await authedFetch(
@@ -498,6 +503,30 @@ export async function requestShowdown(
   );
   if (!res.ok) {
     throw new Error(await readApiError(res, `Showdown failed: ${res.status}`));
+  }
+  return res.json();
+}
+
+export async function requestRunItTwice(
+  tableId: number,
+  optIn: boolean,
+  auth: AuthSigner
+): Promise<{ status: string }> {
+  const res = await authedFetch(
+    `${API_BASE}/api/table/${tableId}/rit-opt-in`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ opt_in: optIn }),
+    },
+    tableId,
+    "rit_opt_in",
+    auth
+  );
+  if (!res.ok) {
+    throw new Error(await readApiError(res, `RIT opt-in failed: ${res.status}`));
   }
   return res.json();
 }
