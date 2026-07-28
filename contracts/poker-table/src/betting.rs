@@ -71,7 +71,8 @@ pub fn process_action(
             if current_bet != 0 {
                 return Err(PokerTableError::CannotBetWhenOutstandingBet);
             }
-            if *amount < table.config.big_blind {
+            let big_blind = game::current_blind_level(table)?.big_blind;
+            if *amount < big_blind {
                 return Err(PokerTableError::BetTooSmall);
             }
             if *amount > p.stack {
@@ -93,8 +94,10 @@ pub fn process_action(
             let to_call = current_bet - p.bet_this_round;
             let total_needed = to_call + *amount;
             // Standard poker minimum-raise rule: the raise increment must be at
-            // least as large as the previous bet or raise in this round.
-            let min_raise = core::cmp::max(table.last_raise_size, table.config.big_blind);
+            // least as large as the previous bet or raise in this round, or the
+            // current blind level's big blind if no raise has happened yet.
+            let current_big_blind = game::current_blind_level(table)?.big_blind;
+            let min_raise = core::cmp::max(table.last_raise_size, current_big_blind);
             if *amount < min_raise {
                 return Err(PokerTableError::RaiseTooSmall);
             }
@@ -170,7 +173,7 @@ pub fn reset_round(env: &Env, table: &mut TableState) -> Result<(), PokerTableEr
     }
 
     // Reset minimum raise size to one big blind for the new betting round.
-    table.last_raise_size = table.config.big_blind;
+    table.last_raise_size = game::current_blind_level(table)?.big_blind;
 
     // First active player after dealer acts first post-flop
     let num_players = table.players.len() as u32;

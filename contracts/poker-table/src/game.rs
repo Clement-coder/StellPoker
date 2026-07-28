@@ -30,12 +30,25 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
         table.players.set(i, p);
     }
 
+    advance_blind_level_if_due(env, table);
+    let level = current_blind_level(table)?;
+
+    // Collect antes from every seated player before blinds. Antes go
+    // straight to the pot and do not count toward `bet_this_round` (unlike
+    // blinds), matching standard tournament ante semantics: they aren't
+    // part of what a player must call to stay in the hand.
+    if level.ante > 0 {
+        for seat in 0..num_players {
+            post_ante(table, seat, level.ante)?;
+        }
+    }
+
     // Post blinds
     let sb_seat = (table.dealer_seat + 1) % num_players;
     let bb_seat = (table.dealer_seat + 2) % num_players;
 
-    post_blind(table, sb_seat, table.config.small_blind)?;
-    post_blind(table, bb_seat, table.config.big_blind)?;
+    post_blind(table, sb_seat, level.small_blind)?;
+    post_blind(table, bb_seat, level.big_blind)?;
 
     // Clear board state
     table.board_cards = Vec::new(env);
@@ -46,12 +59,74 @@ pub fn start_new_hand(env: &Env, table: &mut TableState) -> Result<(), PokerTabl
     history::reset_actions(env, table);
 
     // Reset minimum-raise size to one big blind for the new hand.
-    table.last_raise_size = table.config.big_blind;
+    table.last_raise_size = level.big_blind;
 
     // Transition to dealing phase (committee will shuffle + deal)
     table.phase = GamePhase::Dealing;
     table.last_action_ledger = env.ledger().sequence();
     table.action_deadline = 0; // No action deadline during Dealing phase
+    Ok(())
+}
+
+/// The blinds/ante level currently active for `table`.
+pub(crate) fn current_blind_level(table: &TableState) -> Result<BlindLevel, PokerTableError> {
+    table
+        .config
+        .blinds_schedule
+        .levels
+        .get(table.current_blind_level)
+        .ok_or(PokerTableError::InvalidBlindLevel)
+}
+
+/// Advance `table.current_blind_level` by one if the active level's
+/// duration has elapsed. A no-op on the final level (which lasts
+/// indefinitely) or if the schedule has only one level.
+fn advance_blind_level_if_due(env: &Env, table: &mut TableState) {
+    let num_levels = table.config.blinds_schedule.levels.len();
+    if table.current_blind_level + 1 >= num_levels {
+        return;
+    }
+    let level = match table
+        .config
+        .blinds_schedule
+        .levels
+        .get(table.current_blind_level)
+    {
+        Some(l) => l,
+        None => return,
+    };
+    if level.duration_seconds == 0 {
+        return;
+    }
+    let now = env.ledger().timestamp();
+    if now >= table.level_started_at + level.duration_seconds {
+        table.current_blind_level += 1;
+        table.level_started_at = now;
+        env.events().publish(
+            (Symbol::new(env, "blind_level_advanced"), table.id),
+            table.current_blind_level,
+        );
+    }
+}
+
+/// Collect an ante from a seat: deducted from stack straight into the pot,
+/// without affecting `bet_this_round` (see call site for why).
+fn post_ante(table: &mut TableState, seat: u32, amount: i128) -> Result<(), PokerTableError> {
+    let mut player = table
+        .players
+        .get(seat)
+        .ok_or(PokerTableError::InvalidPlayerIndex)?;
+    let actual = if player.stack < amount {
+        player.all_in = true;
+        player.stack
+    } else {
+        amount
+    };
+
+    player.stack -= actual;
+    player.committed += actual;
+    table.pot += actual;
+    table.players.set(seat, player);
     Ok(())
 }
 

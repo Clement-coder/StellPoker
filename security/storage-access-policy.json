@@ -46,6 +46,21 @@
           "auth_model": "table_admin_require_auth",
           "admin_multisig_required": true
         },
+        "DataKey::Queue": {
+          "authorized_functions": ["join_table", "leave_table", "leave_queue", "get_queue"],
+          "auth_model": "player_require_auth",
+          "admin_multisig_required": false
+        },
+        "DataKey::UpgradeProposal": {
+          "authorized_functions": [
+            "propose_upgrade",
+            "execute_upgrade",
+            "cancel_upgrade",
+            "get_upgrade_proposal"
+          ],
+          "auth_model": "table_admin_require_auth",
+          "admin_multisig_required": true
+        },
         "Symbol::next_id": {
           "authorized_functions": ["create_table"],
           "auth_model": "creator_admin_require_auth",

@@ -458,8 +458,7 @@ mod pot_test {
                 token: Address::generate(env),
                 min_buy_in: 0,
                 max_buy_in: i128::MAX,
-                small_blind: 0,
-                big_blind: 0,
+                blinds_schedule: BlindsSchedule::fixed(env, 0, 0),
                 min_players: 2,
                 max_players: 9,
                 timeout_ledgers: 0,
@@ -492,6 +491,8 @@ mod pot_test {
             rit_state: None,
             jackpot_balance: 0,
             last_raise_size: 0,
+            current_blind_level: 0,
+            level_started_at: 0,
         }
     }
 

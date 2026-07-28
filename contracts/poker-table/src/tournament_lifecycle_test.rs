@@ -4,9 +4,10 @@
 //! Verifies the following phases of a complete tournament:
 //!
 //!  1. **Registration** — N players buy in; the prize pool equals the total buy-ins.
-//!  2. **Blind escalation** — A blind-level schedule is tracked each hand.
-//!     The current contract fixes blinds at table creation; escalation is
-//!     documented here and would be enforced by a future `set_blinds` function.
+//!  2. **Blind escalation** — this simulation runs on fixed blinds throughout;
+//!     see `blind_level_for_hand` below for the schedule-lookup logic, and
+//!     `blinds_schedule_test.rs` for coverage of an actual escalating,
+//!     ante-bearing `BlindsSchedule` exercised against the real contract.
 //!  3. **Play** — Each hand drives the full contract API: deal → bet → reveal
 //!     community cards → showdown or fold-win.
 //!  4. **Elimination** — Players with 0 chips after Settlement leave the table
@@ -287,8 +288,7 @@ fn test_tournament_lifecycle_4_players() {
         token: s.token.address.clone(),
         min_buy_in: 100,
         max_buy_in: 2_000,
-        small_blind: 5,
-        big_blind: 10,
+        blinds_schedule: BlindsSchedule::fixed(&s.env, 5, 10),
         min_players: 2,
         max_players: 4,
         timeout_ledgers: 200,
@@ -317,11 +317,6 @@ fn test_tournament_lifecycle_4_players() {
 
     assert_chip_conservation(&s, table_id, prize_pool);
 
-    // Blind level schedule (documented; enforced in a future `set_blinds` call).
-    // Level 1: hands 1-2, SB=5 / BB=10
-    // Level 2: hands 3+,  SB=10 / BB=20  (would require set_blinds)
-    let mut hand_number: u32 = 0;
-    let mut blind_level: u32 = 1;
 
     // Finish order: knocked-out player addresses, earliest elimination first.
     let mut finish_order: StdVec<Address> = vec![];
@@ -335,8 +330,6 @@ fn test_tournament_lifecycle_4_players() {
     // Strategy: P0 and P1 go all-in; P2 and P3 fold.
     // Winner: P0. P1 is eliminated (4th place).
     {
-        hand_number += 1;
-        blind_level = if hand_number <= 2 { 1 } else { 2 };
 
         s.client.start_hand(&table_id);
         let n = s.client.get_table(&table_id).players.len();
@@ -398,8 +391,6 @@ fn test_tournament_lifecycle_4_players() {
     // P3 wins uncontested (fold-win, no showdown needed) — does NOT eliminate P3.
     // We then play hand 2b where P3 goes all-in and loses to P0.
     {
-        hand_number += 1;
-        blind_level = if hand_number <= 2 { 1 } else { 2 };
 
         s.client.start_hand(&table_id);
         let n = s.client.get_table(&table_id).players.len();
@@ -457,9 +448,6 @@ fn test_tournament_lifecycle_4_players() {
     // Strategy: P0 and one other go all-in; P0 wins via showdown.
     // Eliminates the losing player (3rd place).
     {
-        hand_number += 1;
-        blind_level = if hand_number <= 2 { 1 } else { 2 };
-        let _ = blind_level; // consumed for documentation; set_blinds not yet in contract
 
         s.client.start_hand(&table_id);
         let n = s.client.get_table(&table_id).players.len();

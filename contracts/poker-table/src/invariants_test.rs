@@ -88,8 +88,7 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
             token: admin.clone(),
             min_buy_in: 0,
             max_buy_in: i128::MAX,
-            small_blind: 0,
-            big_blind: 0,
+            blinds_schedule: BlindsSchedule::fixed(env, 0, 0),
             min_players: 2,
             max_players: 9,
             timeout_ledgers: 0,
@@ -122,6 +121,8 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
         rit_state: None,
         jackpot_balance: 0,
         last_raise_size: 0,
+        current_blind_level: 0,
+        level_started_at: 0,
     };
     (table, total)
 }

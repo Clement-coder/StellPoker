@@ -66,6 +66,14 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [pendingTableId, setPendingTableId] = useState<number | null>(null);
   const [openTables, setOpenTables] = useState<OpenTable[]>([]);
+  const [lobbyTables, setLobbyTables] = useState<api.OpenTableInfo[]>([]);
+  const [tableLobbies, setTableLobbies] = useState<
+    Record<number, api.TableLobbyResponse>
+  >({});
+  const [loadingTables, setLoadingTables] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+  const [filterSeatsOpen, setFilterSeatsOpen] = useState(false);
+  const [filterMyStakes, setFilterMyStakes] = useState(false);
 
   const joinTableSim = useJoinTableSimulation(wallet, () => {
     if (pendingTableId) {
@@ -100,6 +108,14 @@ export default function Home() {
   useEffect(() => {
     setOpenTables(wallet ? loadOpenTables(wallet.address) : []);
   }, [wallet, screen]);
+
+  // Load the browsable open-tables list when entering the join screen.
+  useEffect(() => {
+    if (screen === "join" && wallet) {
+      void loadLobbyTables();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, wallet]);
 
   // Auto-advance from connect → menu when wallet connects
   useEffect(() => {
@@ -198,23 +214,34 @@ export default function Home() {
     }
   };
 
-  const handleJoinOpen = async () => {
-    if (!wallet) return;
-    setBusy(true);
-    setError(null);
+  const loadLobbyTables = async () => {
+    setLoadingTables(true);
     try {
       const result = await api.listOpenTables();
-      const first = result.tables[0];
-      if (!first) {
-        setError("No open tables found");
-        return;
+      setLobbyTables(result.tables);
+
+      // Fetch per-seat detail for each table so the search bar can match on
+      // player address and the "my stakes" filter can tell which tables the
+      // connected wallet is already seated at. The bulk /api/tables/open
+      // response doesn't carry seat-level addresses, only counts.
+      const entries = await Promise.all(
+        result.tables.map(async (t) => {
+          try {
+            return [t.table_id, await api.getTableLobby(t.table_id)] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      const lobbies: Record<number, api.TableLobbyResponse> = {};
+      for (const entry of entries) {
+        if (entry) lobbies[entry[0]] = entry[1];
       }
-      const query = first.max_players >= 3 ? "?mode=multi" : "?mode=headsup";
-      router.push(`/table/${first.table_id}${query}`);
+      setTableLobbies(lobbies);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Join open table failed");
+      setError(e instanceof Error ? e.message : "Failed to load open tables");
     } finally {
-      setBusy(false);
+      setLoadingTables(false);
     }
   };
 
@@ -226,6 +253,42 @@ export default function Home() {
     setScreen("connect");
     setError(null);
   };
+
+  const handleJoinRow = (table: api.OpenTableInfo) => {
+    const query = table.max_players >= 3 ? "?mode=multi" : "?mode=headsup";
+    router.push(`/table/${table.table_id}${query}`);
+  };
+
+  const matchesSearch = (table: api.OpenTableInfo, query: string): boolean => {
+    if (!query) return true;
+    const q = query.trim().toLowerCase();
+    if (table.table_id.toString().includes(q)) return true;
+    const lobby = tableLobbies[table.table_id];
+    if (!lobby) return false;
+    return lobby.seats.some(
+      (seat) =>
+        seat.chain_address.toLowerCase().includes(q) ||
+        (seat.wallet_address ?? "").toLowerCase().includes(q)
+    );
+  };
+
+  const isMyTable = (table: api.OpenTableInfo): boolean => {
+    if (!wallet) return false;
+    const lobby = tableLobbies[table.table_id];
+    if (!lobby) return false;
+    return lobby.seats.some(
+      (seat) =>
+        seat.chain_address === wallet.address ||
+        seat.wallet_address === wallet.address
+    );
+  };
+
+  const filteredOpenTables = lobbyTables.filter((t) => {
+    if (!matchesSearch(t, tableSearch)) return false;
+    if (filterSeatsOpen && t.open_wallet_slots <= 0) return false;
+    if (filterMyStakes && !isMyTable(t)) return false;
+    return true;
+  });
 
   const shortAddr = wallet
     ? `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`
@@ -714,22 +777,90 @@ export default function Home() {
               style={{ color: "#4a6a8a" }}
             >
               <div className="flex-1 h-[1px]" style={{ background: "#4a6a8a" }} />
-              <span className="text-[9px]">OR</span>
+              <span className="text-[9px]">OR BROWSE</span>
               <div className="flex-1 h-[1px]" style={{ background: "#4a6a8a" }} />
             </div>
 
-            {/* Join open table */}
-            <button
-              onClick={() => void handleJoinOpen()}
-              disabled={busy || !wallet}
-              className="pixel-btn pixel-btn-blue text-[11px] w-full"
-              style={{
-                padding: "12px 24px",
-                opacity: busy || !wallet ? 0.6 : 1,
-              }}
+            {/* Search + quick filters */}
+            <div className="flex flex-col gap-2 w-full">
+              <input
+                type="text"
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                placeholder="SEARCH BY TABLE ID OR ADDRESS"
+                className="w-full text-center text-[11px]"
+                style={{ padding: "8px 10px" }}
+              />
+              <div className="flex gap-2 justify-center flex-wrap">
+                <button
+                  onClick={() => setFilterSeatsOpen((v) => !v)}
+                  className={`pixel-btn text-[9px] ${filterSeatsOpen ? "pixel-btn-green" : ""}`}
+                  style={{ padding: "6px 10px" }}
+                >
+                  SEATS OPEN
+                </button>
+                <button
+                  onClick={() => setFilterMyStakes((v) => !v)}
+                  disabled={!wallet}
+                  className={`pixel-btn text-[9px] ${filterMyStakes ? "pixel-btn-green" : ""}`}
+                  style={{ padding: "6px 10px", opacity: wallet ? 1 : 0.5 }}
+                >
+                  MY STAKES
+                </button>
+                <button
+                  disabled
+                  title="Tournament tables aren't available yet"
+                  className="pixel-btn text-[9px]"
+                  style={{ padding: "6px 10px", opacity: 0.4, cursor: "not-allowed" }}
+                >
+                  TOURNAMENT
+                </button>
+              </div>
+            </div>
+
+            {/* Results list */}
+            <div
+              className="w-full flex flex-col gap-2 overflow-y-auto"
+              style={{ maxHeight: "220px" }}
+              data-testid="open-tables-list"
             >
-              {busy ? "SEARCHING..." : "JOIN OPEN TABLE"}
-            </button>
+              {loadingTables && (
+                <p className="text-[9px] text-center" style={{ color: "#8a9ab0" }}>
+                  LOADING TABLES...
+                </p>
+              )}
+              {!loadingTables && filteredOpenTables.length === 0 && (
+                <p className="text-[9px] text-center" style={{ color: "#8a9ab0" }}>
+                  NO TABLES MATCH
+                </p>
+              )}
+              {!loadingTables &&
+                filteredOpenTables.map((t) => (
+                  <div
+                    key={t.table_id}
+                    className="flex items-center justify-between gap-2 text-[10px]"
+                    style={{
+                      padding: "8px 10px",
+                      background: "rgba(0,0,0,0.25)",
+                      border: "2px solid #2a4a6a",
+                    }}
+                  >
+                    <span style={{ color: "#ffc078" }}>#{t.table_id}</span>
+                    <span style={{ color: "#8a9ab0" }}>
+                      {t.max_players - t.open_wallet_slots}/{t.max_players} SEATED
+                      {isMyTable(t) ? " · YOU" : ""}
+                    </span>
+                    <button
+                      onClick={() => handleJoinRow(t)}
+                      disabled={busy || !wallet}
+                      className="pixel-btn pixel-btn-blue text-[9px]"
+                      style={{ padding: "6px 12px" }}
+                    >
+                      JOIN
+                    </button>
+                  </div>
+                ))}
+            </div>
           </div>
         )}
 
