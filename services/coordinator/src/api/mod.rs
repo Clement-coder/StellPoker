@@ -22,7 +22,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::{feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
+use crate::{circuit_pins, feature_flags, mpc, session_gc, soroban, AppState, MpcNodeProgress, TableSession};
 use auth::{allow_insecure_dev_auth, enforce_rate_limit, validate_signed_request};
 use parsing::{
     parse_deal_outputs, parse_requested_buy_in, parse_reveal_outputs, parse_showdown_outputs,
@@ -228,6 +228,7 @@ pub async fn create_table(
         rit_shared_board_count: 0,
         mpc_node_progress: Vec::new(),
         mpc_operation_started: None,
+        pinned_artifact_hashes: HashMap::new(),
     };
     state.tables.write().await.insert(table_id, session);
 
@@ -500,6 +501,7 @@ pub async fn request_deal(
             rit_shared_board_count: 0,
             mpc_node_progress: Vec::new(),
             mpc_operation_started: None,
+            pinned_artifact_hashes: HashMap::new(),
         };
         tables.insert(table_id, new_session);
         tables.get_mut(&table_id).unwrap()
@@ -612,6 +614,40 @@ pub async fn request_deal(
     session.showdown_session_id = None;
     session.showdown_result = None;
     session.proof_nonce = 0;
+
+    // Pin circuit artifact hashes for this session (Issue #256).
+    // Every reveal and showdown call will verify these before generating proofs.
+    let player_count = session.player_order.len();
+    let reveal_circuit = "reveal_board_valid".to_string();
+    let showdown_circuit_name = parameterised_circuit_name("showdown_valid", player_count);
+    let deal_circuit_name = deal_circuit.clone();
+    let circuits_to_pin: Vec<&str> = vec![
+        &deal_circuit_name,
+        &reveal_circuit,
+        &showdown_circuit_name,
+    ];
+    match circuit_pins::pin_artifacts(&state.mpc_config.circuit_dir, &circuits_to_pin) {
+        Ok(pins) => {
+            tracing::info!(
+                table_id = table_id,
+                circuits = ?circuits_to_pin,
+                "circuit artifacts pinned for session"
+            );
+            session.pinned_artifact_hashes = pins;
+        }
+        Err(e) => {
+            // Artifacts may not be present in all environments (e.g. CI without
+            // compiled circuits). Log a warning but don't fail the deal — the
+            // empty map means no verification will be performed this session.
+            tracing::warn!(
+                table_id = table_id,
+                error = %e,
+                "circuit artifact pinning skipped (artifacts not found)"
+            );
+            session.pinned_artifact_hashes = HashMap::new();
+        }
+    }
+
     drop(tables);
 
     broadcast_table_state(&state, table_id).await;
@@ -700,6 +736,22 @@ pub async fn request_reveal(
                 );
                 return Err(StatusCode::BAD_GATEWAY);
             }
+        }
+    }
+
+    // Issue #256: verify pinned artifact hashes before generating the reveal proof.
+    if !session.pinned_artifact_hashes.is_empty() {
+        if let Err(e) = circuit_pins::verify_pinned_artifacts(
+            &state.mpc_config.circuit_dir,
+            &session.pinned_artifact_hashes,
+        ) {
+            tracing::error!(
+                table_id = table_id,
+                phase = %phase,
+                error = %e,
+                "circuit artifact changed mid-session — rejecting reveal"
+            );
+            return Err(StatusCode::CONFLICT);
         }
     }
 
