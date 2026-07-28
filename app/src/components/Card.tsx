@@ -152,27 +152,37 @@ export function Card({ value, faceDown = false, size = "md", flip = false, flipD
   const d = DIMS[size];
 
   if (faceDown || value === undefined) {
-    return <CardBack w={d.w} h={d.h} />;
+    return (
+      <div className="card-responsive inline-block">
+        <CardBack w={d.w} h={d.h} />
+      </div>
+    );
   }
 
   // 3D flip: render both faces and rotate from back (180deg) to front (0deg).
   if (flip) {
     return (
-      <div
-        className="card-flip"
-        style={{ width: `${d.w}px`, height: `${d.h}px`, "--flip-delay": `${flipDelay}s` } as CSSProperties}
-      >
-        <div className="card-flip-inner">
-          <div className="card-flip-face card-flip-back">
-            <CardBack w={d.w} h={d.h} />
-          </div>
-          <div className="card-flip-face card-flip-front">
-            <CardFace value={value} d={d} strength={strength} />
+      <div className="card-responsive inline-block">
+        <div
+          className="card-flip"
+          style={{ width: `${d.w}px`, height: `${d.h}px`, "--flip-delay": `${flipDelay}s` } as CSSProperties}
+        >
+          <div className="card-flip-inner">
+            <div className="card-flip-face card-flip-back">
+              <CardBack w={d.w} h={d.h} />
+            </div>
+            <div className="card-flip-face card-flip-front">
+              <CardFace value={value} d={d} strength={strength} />
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  return <CardFace value={value} d={d} className="animate-card-deal" strength={strength} />;
+  return (
+    <div className="card-responsive inline-block">
+      <CardFace value={value} d={d} className="animate-card-deal" strength={strength} />
+    </div>
+  );
 }

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::process::Command;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum SessionStatus {
@@ -150,12 +150,14 @@ pub async fn run_proof_generation(
     sorted_fragments.sort_by_key(|(source, _)| *source);
 
     tracing::info!(
-        "[{}] Merging {} share fragments for circuit {} (node {})",
-        session_id,
-        sorted_fragments.len(),
-        circuit_name,
-        node_id
+        session_id = %session_id,
+        phase = "merge_shares",
+        node_id,
+        circuit = %circuit_name,
+        fragment_count = sorted_fragments.len(),
+        "merging share fragments"
     );
+    let merge_start = Instant::now();
 
     let mut merge_cmd = Command::new("co-noir");
     merge_cmd
@@ -180,6 +182,13 @@ pub async fn run_proof_generation(
     if !merge_output.status.success() {
         let stderr = String::from_utf8_lossy(&merge_output.stderr);
         let stdout = String::from_utf8_lossy(&merge_output.stdout);
+        tracing::error!(
+            session_id = %session_id,
+            phase = "merge_shares",
+            node_id,
+            elapsed_ms = merge_start.elapsed().as_millis() as u64,
+            "co-noir merge-input-shares failed"
+        );
         return Err(format!(
             "co-noir merge-input-shares failed (node {}):\nstderr: {}\nstdout: {}",
             node_id, stderr, stdout
@@ -187,11 +196,14 @@ pub async fn run_proof_generation(
     }
 
     tracing::info!(
-        "[{}] Starting witness generation for circuit {} (node {})",
-        session_id,
-        circuit_name,
-        node_id
+        session_id = %session_id,
+        phase = "witness_generation",
+        node_id,
+        circuit = %circuit_name,
+        elapsed_ms = merge_start.elapsed().as_millis() as u64,
+        "starting witness generation"
     );
+    let witness_start = Instant::now();
 
     // Step 1: Generate witness in MPC
     let mut witness_cmd = Command::new("co-noir");
@@ -216,6 +228,13 @@ pub async fn run_proof_generation(
     if !witness_output.status.success() {
         let stderr = String::from_utf8_lossy(&witness_output.stderr);
         let stdout = String::from_utf8_lossy(&witness_output.stdout);
+        tracing::error!(
+            session_id = %session_id,
+            phase = "witness_generation",
+            node_id,
+            elapsed_ms = witness_start.elapsed().as_millis() as u64,
+            "co-noir generate-witness failed"
+        );
         return Err(format!(
             "co-noir generate-witness failed (node {}):\nstderr: {}\nstdout: {}",
             node_id, stderr, stdout
@@ -223,10 +242,13 @@ pub async fn run_proof_generation(
     }
 
     tracing::info!(
-        "[{}] Witness generated, starting proof generation (node {})",
-        session_id,
-        node_id
+        session_id = %session_id,
+        phase = "proof_generation",
+        node_id,
+        elapsed_ms = witness_start.elapsed().as_millis() as u64,
+        "witness generated, starting proof generation"
     );
+    let proof_start = Instant::now();
 
     // Step 2: Build and generate proof in MPC
     let vk_path = format!("{}/{}/target/vk_keccak", circuit_dir, circuit_name);
@@ -271,17 +293,27 @@ pub async fn run_proof_generation(
 
         if is_transient_resource_error && attempt < 3 {
             tracing::warn!(
-                "[{}] co-noir build-and-generate-proof transient failure on node {} (attempt {}/3): {}",
-                session_id,
+                session_id = %session_id,
+                phase = "proof_generation",
                 node_id,
                 attempt,
-                stderr.trim()
+                elapsed_ms = proof_start.elapsed().as_millis() as u64,
+                error = %stderr.trim(),
+                "co-noir build-and-generate-proof transient failure, retrying"
             );
             sleep(Duration::from_millis((attempt as u64) * 500)).await;
             continue;
         }
 
         let stdout = String::from_utf8_lossy(&proof_output.stdout);
+        tracing::error!(
+            session_id = %session_id,
+            phase = "proof_generation",
+            node_id,
+            attempt,
+            elapsed_ms = proof_start.elapsed().as_millis() as u64,
+            "co-noir build-and-generate-proof failed"
+        );
         return Err(format!(
             "co-noir build-and-generate-proof failed (node {}):\nstderr: {}\nstdout: {}",
             node_id, stderr, stdout
@@ -289,6 +321,13 @@ pub async fn run_proof_generation(
     }
 
     if last_proof_output.is_none() {
+        tracing::error!(
+            session_id = %session_id,
+            phase = "proof_generation",
+            node_id,
+            elapsed_ms = proof_start.elapsed().as_millis() as u64,
+            "co-noir build-and-generate-proof failed after retries"
+        );
         return Err(format!(
             "co-noir build-and-generate-proof failed after retries (node {})",
             node_id
@@ -296,9 +335,12 @@ pub async fn run_proof_generation(
     }
 
     tracing::info!(
-        "[{}] Proof generated successfully (node {})",
-        session_id,
-        node_id
+        session_id = %session_id,
+        phase = "proof_generation",
+        node_id,
+        elapsed_ms = proof_start.elapsed().as_millis() as u64,
+        total_elapsed_ms = merge_start.elapsed().as_millis() as u64,
+        "proof generated successfully"
     );
 
     // Read proof bytes

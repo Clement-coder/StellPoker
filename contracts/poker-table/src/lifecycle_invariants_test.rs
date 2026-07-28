@@ -103,8 +103,7 @@ fn config(s: &Setup, player_count: u32, rake_bps: u32) -> TableConfig {
         token: s.token.address.clone(),
         min_buy_in: 100,
         max_buy_in: 2_000,
-        small_blind: 5,
-        big_blind: 10,
+        blinds_schedule: BlindsSchedule::fixed(&s.env, 5, 10),
         min_players: 2,
         max_players: player_count,
         timeout_ledgers: 100,
@@ -112,6 +111,10 @@ fn config(s: &Setup, player_count: u32, rake_bps: u32) -> TableConfig {
         verifier: s.verifier.clone(),
         game_hub,
         rake_bps,
+        max_rebuys: 0,
+        jackpot_rake_share_bps: 0,
+        min_bad_beat_category: 7,
+        min_bad_beat_rank: 12,
     }
 }
 
@@ -261,12 +264,15 @@ fn choose_action(table: &TableState, mv: &FuzzMove) -> Action {
             }
         }
         FuzzMove::Aggressive => {
-            if to_call > 0 && p.stack > to_call + table.config.big_blind {
-                Action::Raise(table.config.big_blind)
+            let big_blind = crate::game::current_blind_level(table)
+                .expect("valid blind level")
+                .big_blind;
+            if to_call > 0 && p.stack > to_call + big_blind {
+                Action::Raise(big_blind)
             } else if to_call > 0 {
                 Action::Call
-            } else if p.stack >= table.config.big_blind {
-                Action::Bet(table.config.big_blind)
+            } else if p.stack >= big_blind {
+                Action::Bet(big_blind)
             } else {
                 Action::AllIn
             }
@@ -301,6 +307,7 @@ fn settle_showdown(s: &Setup, table_id: u32) {
             BytesN::from_array(&s.env, &[0u8; 32]),
         ));
     }
+    let bad_beat_scores: Vec<(u32, u32)> = Vec::new(&s.env);
     s.client.submit_showdown(
         &table_id,
         &s.committee,
@@ -308,6 +315,7 @@ fn settle_showdown(s: &Setup, table_id: u32) {
         &salts,
         &Bytes::new(&s.env),
         &public_inputs,
+        &bad_beat_scores,
     );
 }
 
@@ -337,6 +345,7 @@ proptest! {
         commit_deal(&s, table_id, player_count);
         assert_invariants(&s, table_id, initial_total, rake_bps);
 
+        let mut seqs: std::vec::Vec<(Address, u32)> = std::vec![];
         let mut next_board_index = player_count * 2;
         for mv in &moves {
             let table = s.client.get_table(&table_id);
@@ -345,7 +354,24 @@ proptest! {
                     let seat = table.current_turn;
                     let player = players.get(seat as usize).unwrap();
                     let action = choose_action(&table, mv);
-                    s.client.player_action(&table_id, player, &action);
+                    let seq = {
+                        let mut found = false;
+                        let mut val = 0u32;
+                        for entry in seqs.iter_mut() {
+                            if entry.0 == *player {
+                                entry.1 += 1;
+                                val = entry.1;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if !found {
+                            seqs.push((player.clone(), 1));
+                            val = 1;
+                        }
+                        val
+                    };
+                    s.client.player_action(&table_id, player, &seq, &action);
                     assert_invariants(&s, table_id, initial_total, rake_bps);
                 }
                 GamePhase::DealingFlop | GamePhase::DealingTurn | GamePhase::DealingRiver => {

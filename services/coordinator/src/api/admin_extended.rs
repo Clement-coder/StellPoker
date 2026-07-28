@@ -642,3 +642,42 @@ pub async fn admin_cancel_migration(
         "cancelled_by": auth.address
     })))
 }
+
+// ============================================================================
+// Issue #102: Committee Key Rotation Status
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct CommitteeKeyRotationStatus {
+    pub active_address: String,
+    pub active_issued_at_unix: u64,
+    pub retiring_address: Option<String>,
+    pub rotation_interval_secs: u64,
+    pub overlap_secs: u64,
+}
+
+/// Read-only view into the committee identity rotation state: which address
+/// is currently active, which (if any) is mid-overlap and about to be
+/// deregistered, and the configured rotation cadence.
+pub async fn admin_committee_key_rotation_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<CommitteeKeyRotationStatus>, StatusCode> {
+    let auth = validate_admin_request(
+        &state,
+        &headers,
+        "admin_committee_key_rotation_status",
+        &state.admin_state,
+    )
+    .await?;
+    require_role(&auth, AdminRole::ReadOnly)?;
+
+    let rotation = state.committee_key_rotation.read().await;
+    Ok(Json(CommitteeKeyRotationStatus {
+        active_address: rotation.active.address.clone(),
+        active_issued_at_unix: rotation.active.issued_at_unix,
+        retiring_address: rotation.retiring.as_ref().map(|k| k.address.clone()),
+        rotation_interval_secs: rotation.config.rotation_interval.as_secs(),
+        overlap_secs: rotation.config.overlap.as_secs(),
+    }))
+}

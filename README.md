@@ -50,6 +50,10 @@ Supports up to 6 players. Includes a solo mode against a deterministic AI oppone
 - **ZK-verified** — Deal, reveal, and showdown proofs are UltraHonk proofs verified onchain via Soroban's native BN254 host functions (Protocol 25).
 - **Trustless settlement** — All bets, pot calculation, and payouts are handled entirely in Soroban smart contracts.
 - **Reusable library** — `stellar-zk-cards` is a standalone Rust crate for card encoding and hand evaluation that any Soroban app can use.
+- **On-chain hand history** — the last 16 settled hands per table are archived in a circular buffer, readable by anyone. See [docs/poker-table-hand-history.md](docs/poker-table-hand-history.md).
+- **Partial buy-ins** — players top their stack up between hands for any amount inside the table's buy-in band, with a configurable per-session rebuy limit. See [docs/poker-table-rebuys.md](docs/poker-table-rebuys.md).
+- **Multi-table play** — a wallet may sit at any number of tables at once; submissions are sequenced per account so parallel actions never collide. See [docs/multi-table-play.md](docs/multi-table-play.md).
+- **Node fee sharing** — rake is split among the active MPC nodes in proportion to stake. See [docs/committee-fee-distribution.md](docs/committee-fee-distribution.md).
 
 ## Contracts on Testnet
 
@@ -389,3 +393,11 @@ export function CreateTableButton() {
   return <button>Create Solo Table</button>;
 }
 ```
+
+### Documentation & Guides
+
+- [Developer Tutorial: Building Card Games with `stellar-zk-cards`](docs/tutorial-card-game.md)
+- [Noir Testing Guide](docs/NOIR_TESTING_GUIDE.md)
+- [Local Committee Development Guide](docs/local-committee-dev-guide.md)
+- [Soroban Storage Optimization](docs/soroban-storage-optimization.md)
+

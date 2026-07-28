@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, BytesN, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, Env, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -6,8 +6,11 @@ pub struct TableConfig {
     pub token: Address, // Payment token (e.g., USDC)
     pub min_buy_in: i128,
     pub max_buy_in: i128,
-    pub small_blind: i128,
-    pub big_blind: i128,
+    /// Blinds/ante structure for this table. A single-level schedule with
+    /// `duration_seconds: 0` behaves as fixed blinds; multiple levels with
+    /// nonzero `duration_seconds` produce an escalating (tournament-style)
+    /// structure, optionally with an ante at any level.
+    pub blinds_schedule: BlindsSchedule,
     /// Minimum seated players required to start a hand.
     pub min_players: u32,
     /// Maximum seated players allowed at the table. Capped at 6.
@@ -19,6 +22,81 @@ pub struct TableConfig {
     /// Rake taken from every pot, in basis points (100 = 1%). Capped at
     /// `MAX_RAKE_BPS` (500 = 5%); enforced on table creation.
     pub rake_bps: u32,
+    /// How many times a seated player may top their stack up during one
+    /// session at this table. `0` means unlimited. The counter resets when a
+    /// player leaves and rejoins.
+    pub max_rebuys: u32,
+    /// Share of the total rake (in basis points) that is diverted into the
+    /// bad-beat jackpot pool instead of going to the house. `0` disables the
+    /// jackpot entirely.
+    pub jackpot_rake_share_bps: u32,
+    /// Minimum hand category required for a bad-beat qualifying hand
+    /// (e.g. `7` = FourOfAKind).  Used alongside `min_bad_beat_rank` to
+    /// compute the qualifying score threshold.
+    pub min_bad_beat_category: u32,
+    /// Minimum rank of the quad / trips / card required within the
+    /// qualifying category (e.g. `12` = Ace).
+    pub min_bad_beat_rank: u32,
+}
+
+/// A single blinds/ante level in a table's schedule.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BlindLevel {
+    pub small_blind: i128,
+    pub big_blind: i128,
+    /// Ante collected from every seated player at the start of each hand
+    /// while this level is active. `0` means no ante.
+    pub ante: i128,
+    /// How long this level lasts once active, in seconds, before the
+    /// schedule advances to the next level. Ignored on the final level
+    /// (which lasts indefinitely once reached). `0` on a single-level
+    /// schedule means the level never advances (fixed blinds).
+    pub duration_seconds: u64,
+}
+
+/// Ordered blinds levels for a table. `levels[0]` is active from table
+/// creation; the active level advances by wall-clock time as hands are
+/// played (checked at the start of each new hand).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BlindsSchedule {
+    pub levels: Vec<BlindLevel>,
+}
+
+impl BlindsSchedule {
+    /// A single-level, non-escalating schedule: fixed blinds, no ante.
+    pub fn fixed(env: &Env, small_blind: i128, big_blind: i128) -> Self {
+        let mut levels = Vec::new(env);
+        levels.push_back(BlindLevel {
+            small_blind,
+            big_blind,
+            ante: 0,
+            duration_seconds: 0,
+        });
+        BlindsSchedule { levels }
+    }
+}
+
+/// A player waiting for a seat to open at a full table. `buy_in` has
+/// already been transferred into contract escrow at queue-join time, so no
+/// further authorization is needed from the player when they're auto-seated.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct QueueEntry {
+    pub player: Address,
+    pub buy_in: i128,
+}
+
+/// A pending contract-wasm upgrade, committed to at `propose_upgrade` time
+/// and only executable once `execute_after` has passed. `execute_upgrade`
+/// always uses the hash stored here rather than one passed in again, so the
+/// executed upgrade is guaranteed to match what was originally proposed.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposal {
+    pub new_wasm_hash: BytesN<32>,
+    pub execute_after: u64, // ledger timestamp (seconds)
 }
 
 #[contracterror]
@@ -66,6 +144,26 @@ pub enum PokerTableError {
     ContractPaused = 39,
     ForceFoldNotAvailable = 40,
     TargetNotActive = 41,
+    CannotRebuyDuringActiveHand = 42,
+    RebuyLimitReached = 43,
+    InvalidRebuyAmount = 44,
+    NotInRitPhase = 45,
+    RitAlreadyDecided = 46,
+    NotHeadsUpAllIn = 47,
+    RunItTwiceNotEnabled = 48,
+    RitAlreadyActive = 49,
+    BoardAlreadyRevealedForRun = 50,
+    JackpotNotConfigured = 51,
+    BadBeatHandDataInvalid = 52,
+    StaleActionSequence = 53,
+    EmptyBlindsSchedule = 54,
+    InvalidBlindLevel = 55,
+    AlreadyQueued = 56,
+    NotQueued = 57,
+    QueueFull = 58,
+    NoUpgradeProposal = 59,
+    UpgradeDelayNotElapsed = 60,
+    UpgradeDelayTooShort = 61,
 }
 
 #[contracttype]
@@ -82,6 +180,12 @@ pub struct PlayerState {
     pub all_in: bool,
     pub sitting_out: bool,
     pub seat_index: u32,
+    /// Every chip this player has deposited at the table this session — the
+    /// initial buy-in plus every rebuy. Used to compute session profit and to
+    /// audit chip conservation independently of the current stack.
+    pub total_buy_in: i128,
+    /// Rebuys used this session, checked against `TableConfig::max_rebuys`.
+    pub rebuy_count: u32,
 }
 
 #[contracttype]
@@ -99,6 +203,11 @@ pub enum GamePhase {
     Showdown,     // Revealing hands and determining winner
     Settlement,   // Pot distributed, ready for next hand
     Dispute,      // Something went wrong; funds frozen
+    // Run-It-Twice phases
+    AwaitingRunItTwice, // Waiting for all-in players to decide on RIT
+    ShowdownRun1,     // First run's showdown
+    ShowdownRun2,     // Second run's showdown
+    RitSettlement,    // Pot split between two runs
 }
 
 #[contracttype]
@@ -117,6 +226,102 @@ pub enum Action {
 pub struct SidePot {
     pub amount: i128,
     pub eligible_players: Vec<u32>, // seat indices
+}
+
+/// State tracking for Run-It-Twice when two players are all-in heads-up.
+/// RIT deals the remaining board twice and splits the pot based on wins.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RitState {
+    pub active: bool,
+    /// Seat indices of the two all-in players who opted in
+    pub player1_seat: u32,
+    pub player2_seat: u32,
+    pub player1_opted_in: bool,
+    pub player2_opted_in: bool,
+    /// Number of board cards already revealed before RIT was activated
+    /// (0 = preflop, 3 = flop, 4 = turn)
+    pub shared_board_count: u32,
+    /// Which run we're currently dealing (0 = not started, 1 or 2)
+    pub current_run: u32,
+    /// Deck indices for Run 1's full 5-card board (shared + remaining)
+    pub run1_board_indices: Vec<u32>,
+    /// Deck indices for Run 2's full 5-card board (shared + run2 remaining)
+    pub run2_board_indices: Vec<u32>,
+    /// Winner seat for Run 1
+    pub run1_winner: u32,
+    /// Winner seat for Run 2
+    pub run2_winner: u32,
+}
+
+/// The kind of a betting action, without its amount. Stored in hand history
+/// where the chips moved are recorded separately in `ActionRecord::amount`.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActionKind {
+    Fold,
+    Check,
+    Call,
+    Bet,
+    Raise,
+    AllIn,
+}
+
+/// One entry of a hand's action summary.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ActionRecord {
+    pub seat: u32,
+    /// Betting round the action was taken in.
+    pub phase: GamePhase,
+    pub kind: ActionKind,
+    /// Chips this action added to the pot (0 for fold/check).
+    pub amount: i128,
+}
+
+/// Chips credited to a single seat when a hand settled.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Payout {
+    pub seat: u32,
+    pub address: Address,
+    pub amount: i128,
+}
+
+/// An immutable record of one completed hand, retained in the table's circular
+/// hand-history buffer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HandRecord {
+    pub hand_number: u32,
+    /// Seat-ordered addresses of the players dealt into the hand.
+    pub players: Vec<Address>,
+    /// Community cards as they stood when the hand ended (may be shorter than
+    /// five if everyone folded before the river).
+    pub board: Vec<u32>,
+    /// Betting actions in the order they were taken, truncated at
+    /// `history::MAX_ACTIONS_PER_HAND`.
+    pub actions: Vec<ActionRecord>,
+    /// How the pot was split, one entry per paid seat.
+    pub payouts: Vec<Payout>,
+    /// Pot size before rake was deducted.
+    pub total_pot: i128,
+    pub rake: i128,
+    /// True when the hand ended by showdown, false when everyone else folded.
+    pub showdown: bool,
+    pub settled_ledger: u32,
+}
+
+/// Bookkeeping for a table's circular hand-history buffer.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct HandHistoryMeta {
+    /// Slot the next archived hand will be written to.
+    pub next_slot: u32,
+    /// Records currently stored, saturating at the buffer capacity.
+    pub stored: u32,
+    /// Hands archived over the table's lifetime, including evicted ones.
+    pub total_archived: u32,
 }
 
 #[contracttype]
@@ -141,9 +346,26 @@ pub struct TableState {
     pub session_id: u32, // Game hub session ID for current hand
     /// Accumulated rake collected from settled hands, withdrawable by `admin`.
     pub rake_balance: i128,
+    /// Accumulated bad-beat jackpot pool, fed by a share of each hand's rake.
+    /// Paid out when a qualifying bad beat occurs at showdown.
+    pub jackpot_balance: i128,
     /// Ledger sequence by which the current player must act. Any other seated
     /// player may call `force_fold` after this deadline is reached.
     pub action_deadline: u32,
+    /// Betting actions taken so far in the current hand. Cleared when a hand
+    /// starts and archived into the hand-history buffer when it settles.
+    pub hand_actions: Vec<ActionRecord>,
+    /// Run-It-Twice state when two players are all-in heads-up.
+    pub rit_state: Option<RitState>,
+    /// Size of the last bet or raise in the current betting round.
+    /// The next raise must be at least this large (standard poker minimum-raise
+    /// rule). Cleared to `big_blind` when a new betting round begins.
+    pub last_raise_size: i128,
+    /// Index into `config.blinds_schedule.levels` of the currently active
+    /// blinds level.
+    pub current_blind_level: u32,
+    /// Ledger timestamp (seconds) at which the current blind level began.
+    pub level_started_at: u64,
 }
 
 #[contracttype]
@@ -151,4 +373,15 @@ pub struct TableState {
 pub enum DataKey {
     Table(u32),
     Paused(u32), // per-table pause flag
+    /// One archived hand: (table_id, circular buffer slot).
+    HandRecord(u32, u32),
+    /// Circular buffer bookkeeping for a table's hand history.
+    HandHistoryMeta(u32),
+    /// Tables a wallet is currently seated at, for multi-table clients.
+    PlayerTables(Address),
+    /// Per-player per-table monotonically increasing action sequence counter.
+    /// Used to reject stale or replayed betting actions.
+    PlayerActionCounter(u32, Address),
+    Queue(u32),  // waiting-list queue for a full table
+    UpgradeProposal(u32),
 }

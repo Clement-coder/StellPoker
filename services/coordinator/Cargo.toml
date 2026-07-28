@@ -12,8 +12,14 @@ rand = "0.8"
 tower-http = { version = "0.5", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-opentelemetry = "0.24"
+opentelemetry = { version = "0.23", features = ["trace"] }
+opentelemetry_sdk = { version = "0.23", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.16", features = ["grpc-tonic", "trace"] }
+opentelemetry-semantic-conventions = "0.15"
+tonic = { version = "0.11", default-features = false, features = ["transport"] }
 tower = { version = "0.4", features = ["util"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tempfile = "3"
 base64 = "0.22"
 prometheus = "0.14"
@@ -25,7 +31,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ark-ff = "0.4"
 ark-bn254 = "0.4"
 hex = "0.4"
-ed25519-dalek = "2.2"
+ed25519-dalek = { version = "2.2", features = ["rand_core"] }
 stellar-strkey = "0.0.13"
 sha2 = "0.10"
 hostname = "0.4"

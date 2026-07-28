@@ -481,3 +481,41 @@ export async function getActiveAddress(): Promise<string | null> {
     return null;
   }
 }
+
+/**
+ * Poll Freighter every `intervalMs` milliseconds and call `onAddressChange`
+ * whenever the active address differs from `currentAddress`.
+ *
+ * Returns a cleanup function that stops polling.
+ *
+ * Freighter does not expose a native account-change event, so polling is the
+ * only reliable cross-browser approach.
+ */
+export function subscribeToAccountChanges(
+  currentAddress: string,
+  onAddressChange: (newAddress: string | null) => void,
+  intervalMs = 2000
+): () => void {
+  let cancelled = false;
+  let lastSeen = currentAddress;
+
+  const check = async () => {
+    if (cancelled) return;
+    try {
+      const addr = await getActiveAddress();
+      if (cancelled) return;
+      if (addr !== lastSeen) {
+        lastSeen = addr ?? "";
+        onAddressChange(addr);
+      }
+    } catch {
+      // Extension unreachable — don't treat as a change.
+    }
+  };
+
+  const id = setInterval(() => void check(), intervalMs);
+  return () => {
+    cancelled = true;
+    clearInterval(id);
+  };
+}

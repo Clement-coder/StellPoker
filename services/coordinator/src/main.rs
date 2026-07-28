@@ -29,7 +29,7 @@ use prometheus::{
     Encoder, Gauge, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -43,6 +43,7 @@ mod api;
 mod api_version;
 mod archiver;
 mod audit_log;
+mod circuit_pins;
 mod cors_db;
 pub mod crypto;
 mod dashboard;
@@ -51,6 +52,7 @@ mod discovery;
 mod feature_flags;
 mod hot_reload;
 mod idempotency;
+mod key_rotation;
 mod leader_election;
 mod mpc;
 mod mpc_auth_middleware;
@@ -59,16 +61,18 @@ mod mpc_heartbeat;
 mod node_reliability;
 mod plugin;
 mod proof_cache;
+mod rate_limit;
 mod rate_limit_db;
 #[path = "middleware.rs"]
 mod request_log;
 mod session_cache;
 mod session_gc;
 mod session_migration;
-mod session_migration;
 mod soroban;
 mod stats;
+mod telemetry;
 mod tls_client;
+mod tournament;
 
 use api::admin::{AdminConfig, AdminState};
 
@@ -141,12 +145,14 @@ struct HealthResponse {
         api::get_chain_config,
         api::create_table,
         api::list_open_tables,
+        api::list_table_overview,
         api::join_table,
         api::get_table_lobby,
         api::request_deal,
         api::request_reveal,
         api::request_showdown,
         api::player_action,
+        api::rit_opt_in,
         api::get_player_cards,
         api::get_table_state,
         api::get_mpc_status,
@@ -201,6 +207,11 @@ struct HealthResponse {
         api::types::CreateTableResponse,
         api::types::OpenTablesResponse,
         api::types::OpenTableInfo,
+        api::types::TableOverviewResponse,
+        api::types::TableOverviewInfo,
+        stats::PlayerHudStats,
+        stats::RatingEntry,
+        stats::RatingLeaderboardResponse,
         api::types::JoinTableResponse,
         api::types::TableLobbyResponse,
         api::types::LobbySeat,
@@ -208,6 +219,8 @@ struct HealthResponse {
         api::types::WalletChallengeResponse,
         api::types::WalletVerifyRequest,
         api::types::WalletVerifyResponse,
+        api::types::RitOptInRequest,
+        api::types::RitOptInResponse,
         api::types::MpcNodeProgress,
         api::types::TableMpcStatusResponse,
     )),
@@ -263,6 +276,10 @@ struct AppState {
     admin_config: Arc<RwLock<api::admin::AdminConfig>>,
     admin_state: api::admin::AdminState,
     rate_limit_state: Arc<RwLock<RateLimitState>>,
+    /// Per-IP sliding-window buckets for the global rate-limit middleware (Issue #25).
+    ip_buckets: rate_limit::IpBucketStore,
+    /// Counter of 429 responses; watched by the sustained-rate alert task (Issue #25).
+    rejection_counter: rate_limit::RejectionCounter,
     metrics: MetricsState,
     chat_channels: Arc<Mutex<HashMap<u32, tokio::sync::broadcast::Sender<String>>>>,
     /// Per-table broadcast channels for `/api/table/:table_id/state/ws`
@@ -289,6 +306,15 @@ struct AppState {
     idempotency_store: idempotency::IdempotencyStore,
     /// MPC deal phase benchmarks (Issue #100).
     benchmark_store: mpc_benchmark::BenchmarkStore,
+    /// Rotating committee-registry identity used for node registration /
+    /// staking (Issue #102). Kept separate from `soroban_config.secret_key`
+    /// (the general transaction-submission identity) so rotating it can't
+    /// disrupt in-flight gameplay transaction signing.
+    committee_key_rotation: Arc<RwLock<key_rotation::KeyRotationState>>,
+    /// Single-use registry for MPC proof session IDs (Issue #12).
+    /// A session ID that has already been used is rejected to prevent replay
+    /// attacks on deal/reveal/showdown proofs.
+    used_session_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 #[derive(Clone)]
@@ -344,6 +370,12 @@ struct TableSession {
     showdown_session_id: Option<String>,
     /// Cached showdown result for idempotent retries.
     showdown_result: Option<(String, u32)>,
+    /// Run-It-Twice tracking: "inactive" or "run2_active".
+    rit_phase: String,
+    /// Number of shared board cards when RIT was activated (0=preflop, 3=flop, 4=turn).
+    /// Set once from on-chain state during Run 1 showdown; used for Run 2 board computation.
+    #[serde(default)]
+    rit_shared_board_count: u32,
     /// Monotonic nonce for unique proof session IDs.
     proof_nonce: u64,
     /// Per-node MPC phase progress for the current operation.
@@ -352,6 +384,10 @@ struct TableSession {
     /// Timestamp when the current MPC operation started (epoch secs).
     #[serde(default)]
     mpc_operation_started: Option<u64>,
+    /// Circuit artifact hashes pinned at session start (circuit_name → sha256_hex).
+    /// Every proof submission verifies these to prevent mid-session artifact changes.
+    #[serde(default)]
+    pinned_artifact_hashes: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -366,13 +402,10 @@ struct RateLimitState {
 
 #[tokio::main]
 async fn main() {
-    // Structured logging: REQUEST_LOG_FORMAT=json uses JSON output; default is human-readable.
-    let log_format = std::env::var("REQUEST_LOG_FORMAT").unwrap_or_default();
-    if log_format.eq_ignore_ascii_case("json") {
-        tracing_subscriber::fmt().json().init();
-    } else {
-        tracing_subscriber::fmt().init();
-    }
+    // Initialise tracing + optional OpenTelemetry OTLP pipeline.
+    // The guard must stay alive for the duration of the process — dropping it
+    // flushes all pending spans to the exporter.
+    let _otel_guard = telemetry::init_tracer();
 
     let enc_key =
         crypto::EncryptionKey::from_env().unwrap_or_else(|_| crypto::EncryptionKey::ephemeral());
@@ -639,6 +672,25 @@ async fn main() {
     let archive_store = archiver::new_store();
     archiver::load_existing_archives(&archive_store, &archive_config).await;
 
+    // Committee identity rotation (Issue #102): bootstrap from the
+    // already-configured COMMITTEE_SECRET so an existing on-chain
+    // registration is treated as the initial "active" key.
+    let committee_key_rotation = {
+        let now = SystemTime::now();
+        let initial_key = key_rotation::CommitteeKey::from_secret(&soroban_config.secret_key, now)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "COMMITTEE_SECRET is not a valid Stellar key ({e}); generating an ephemeral \
+                     identity for committee key rotation tracking"
+                );
+                key_rotation::CommitteeKey::generate(now)
+            });
+        Arc::new(RwLock::new(key_rotation::KeyRotationState::new(
+            initial_key,
+            key_rotation::RotationConfig::from_env(),
+        )))
+    };
+
     let state = AppState {
         tables: Arc::clone(&tables),
         lobby_assignments: Arc::clone(&lobby_assignments),
@@ -664,8 +716,18 @@ async fn main() {
         node_registry: Arc::new(RwLock::new(discovery::NodeRegistry::new())),
         idempotency_store: idempotency::new_store(),
         benchmark_store,
+        committee_key_rotation,
+        used_session_ids: Arc::new(RwLock::new(HashSet::new())),
     };
     idempotency::spawn_gc_task(state.idempotency_store.clone());
+    // Spawn rate-limit background tasks (Issue #25).
+    rate_limit::spawn_rate_alert_task(state.rejection_counter.clone());
+    rate_limit::spawn_bucket_gc_task(state.ip_buckets.clone());
+    key_rotation::spawn_rotation_task(
+        state.committee_key_rotation.clone(),
+        state.soroban_config.clone(),
+    );
+    circuit_pins::spawn_circuit_watcher(state.mpc_config.circuit_dir.clone());
 
     if let Some(path) = hot_reload_snapshot {
         hot_reload::spawn_snapshot_task(path, Arc::clone(&tables), Arc::clone(&lobby_assignments));
@@ -769,6 +831,12 @@ async fn main() {
         )
         .route("/api/tables/create", post(api::create_table))
         .route("/api/tables/open", get(api::list_open_tables))
+        .route("/api/tables/overview", get(api::list_table_overview))
+        .route("/api/stats/player/:address", get(get_player_hud_stats))
+        .route(
+            "/api/ratings/leaderboard",
+            get(get_rating_leaderboard),
+        )
         .route("/api/chain-config", get(api::get_chain_config))
         .route("/api/table/:table_id/join", post(api::join_table))
         .route("/api/table/:table_id/lobby", get(api::get_table_lobby))
@@ -786,10 +854,22 @@ async fn main() {
             post(api::player_action),
         )
         .route(
+            "/api/table/:table_id/rit-opt-in",
+            post(api::rit_opt_in),
+        )
+        .route(
             "/api/table/:table_id/player/:address/cards",
             get(api::get_player_cards),
         )
         .route("/api/table/:table_id/state", get(api::get_table_state))
+        .route(
+            "/api/table/:table_id/players",
+            get(api::get_players_paginated),
+        )
+        .route(
+            "/api/table/:table_id/hand-history/chunk",
+            get(api::get_hand_history_chunk),
+        )
         .route("/api/table/:table_id/mpc-status", get(api::get_mpc_status))
         .route("/api/committee/status", get(api::committee_status))
         .route("/api/table/:table_id/chat/ws", get(chat_ws_handler))
@@ -842,6 +922,10 @@ async fn main() {
         )
         .route("/api/admin/migrations", get(api::admin_list_migrations))
         .route(
+            "/api/admin/committee-key-rotation",
+            get(api::admin_committee_key_rotation_status),
+        )
+        .route(
             "/api/admin/migrations/initiate",
             post(api::admin_initiate_migration),
         )
@@ -860,6 +944,15 @@ async fn main() {
             get(api::admin_get_archive),
         )
         .route("/api/admin/archives/purge", post(api::admin_purge_archives))
+        // Tournament (sit-and-go) endpoints (Issue #17)
+        .route("/api/tournaments", get(api::tournament_api::list_tournaments))
+        .route("/api/tournaments", post(api::tournament_api::create_tournament))
+        .route("/api/tournaments/:id", get(api::tournament_api::get_tournament))
+        .route("/api/tournaments/:id/register", post(api::tournament_api::register_player))
+        .route("/api/tournaments/:id/start", post(api::tournament_api::start_tournament))
+        .route("/api/tournaments/:id/hand-result", post(api::tournament_api::record_hand_result))
+        .route("/api/tournaments/:id/balancing", get(api::tournament_api::get_balancing))
+        .route("/api/tournaments/:id/cancel", post(api::tournament_api::cancel_tournament))
         .layer(axum::middleware::from_fn_with_state(
             state.idempotency_store.clone(),
             idempotency::idempotency_middleware,
@@ -877,6 +970,13 @@ async fn main() {
             mpc_auth_middleware::authenticate_mpc_request,
         ))
         .layer(middleware::from_fn(request_log::log_request))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limit::RateLimitMiddlewareState {
+                buckets: state.ip_buckets.clone(),
+                rejections: state.rejection_counter.clone(),
+            },
+            rate_limit::ip_rate_limit_middleware,
+        ))
         .layer(build_cors_layer(state.db_pool.as_deref()).await)
         .layer(middleware::from_fn(api_version::rewrite_and_tag_version))
         .with_state(state);
@@ -1241,6 +1341,32 @@ async fn handle_game_state_socket(socket: WebSocket, table_id: u32, state: AppSt
 async fn get_stats(State(state): State<AppState>) -> Json<stats::StatsResponse> {
     let ttl = std::time::Duration::from_secs(30);
     Json(stats::get_stats(&state.stats, ttl).await)
+}
+
+/// GET /api/stats/player/:address — HUD stats for seat tooltip (Issue #55).
+async fn get_player_hud_stats(
+    State(state): State<AppState>,
+    axum::extract::Path(address): axum::extract::Path<String>,
+) -> Json<stats::PlayerHudStats> {
+    Json(stats::get_player_hud(&state.stats, &address).await)
+}
+
+/// GET /api/ratings/leaderboard — on-chain ELO leaderboard cache (Issue #70).
+async fn get_rating_leaderboard(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<stats::RatingLeaderboardResponse> {
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(20)
+        .clamp(1, 50);
+    stats::ensure_demo_ratings(&state.stats).await;
+    Json(stats::get_rating_leaderboard(&state.stats, offset, limit).await)
 }
 
 async fn get_benchmarks(State(state): State<AppState>) -> Json<serde_json::Value> {

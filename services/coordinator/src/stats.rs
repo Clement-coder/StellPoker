@@ -34,6 +34,37 @@ pub struct PlayerStats {
     pub biggest_pot_won: i64,
 }
 
+/// HUD-style action stats for seat tooltips (Issue #55).
+#[derive(Serialize, Clone, Debug, Default, ToSchema)]
+pub struct PlayerHudStats {
+    pub address: String,
+    pub hands_played: u64,
+    /// Voluntarily put money in pot % (0–100).
+    pub vpip: f64,
+    /// Preflop raise % (0–100).
+    pub pfr: f64,
+    /// Aggression factor = (bets + raises) / calls (0 if no calls).
+    pub aggression_factor: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct HudCounters {
+    /// Hands where the player took at least one action.
+    hands_seen: u64,
+    /// Hands where player voluntarily put chips in (call/bet/raise/all-in).
+    vpip_hands: u64,
+    /// Hands where player raised or bet preflop (tracked as raise/bet).
+    pfr_hands: u64,
+    bets_raises: u64,
+    calls: u64,
+    /// Per-hand flags to avoid double-counting within a hand.
+    /// Keyed by "table_id:hand_hint" is ideal; we use a simple
+    /// last-action window: mark once per record_action batch via flags.
+    vpip_this_hand: bool,
+    pfr_this_hand: bool,
+    saw_action_this_hand: bool,
+}
+
 #[derive(Serialize, Clone, Debug, ToSchema)]
 pub struct StatsResponse {
     pub global: GlobalStats,
@@ -43,11 +74,32 @@ pub struct StatsResponse {
     pub cached_at: u64,
 }
 
+/// On-chain ELO leaderboard cache entry (Issue #70).
+#[derive(Serialize, Clone, Debug, Default, ToSchema)]
+pub struct RatingEntry {
+    pub address: String,
+    pub rating: u32,
+    pub hands_played: u32,
+    pub hands_won: u32,
+}
+
+#[derive(Serialize, Clone, Debug, ToSchema)]
+pub struct RatingLeaderboardResponse {
+    pub entries: Vec<RatingEntry>,
+    pub min_hands: u32,
+    pub total: u32,
+}
+
 // ─── Store ───────────────────────────────────────────────────────────────────
 
 pub(crate) struct Inner {
     global: GlobalStats,
     players: HashMap<String, PlayerStats>,
+    /// Action-derived HUD counters (Issue #55).
+    hud: HashMap<String, HudCounters>,
+    /// Cached on-chain rating leaderboard (Issue #70).
+    ratings: Vec<RatingEntry>,
+    ratings_min_hands: u32,
     /// Ledger cursor for next Horizon poll (paging token).
     cursor: Option<String>,
     /// When the last cached response was built.
@@ -61,6 +113,9 @@ impl Default for Inner {
         Self {
             global: GlobalStats::default(),
             players: HashMap::new(),
+            hud: HashMap::new(),
+            ratings: Vec::new(),
+            ratings_min_hands: 10,
             cursor: None,
             last_built: None,
             cached: None,
@@ -72,6 +127,169 @@ pub type StatsStore = Arc<RwLock<Inner>>;
 
 pub fn new_store() -> StatsStore {
     Arc::new(RwLock::new(Inner::default()))
+}
+
+/// Record a player action for HUD stats (Issue #55).
+/// Call when a player action is successfully applied.
+///
+/// `new_hand` should be true when this is the first action observed for the
+/// player in a new hand (coordinator may pass false and rely on street resets).
+pub async fn record_player_action(
+    store: &StatsStore,
+    address: &str,
+    action: &str,
+    is_preflop: bool,
+) {
+    let mut guard = store.write().await;
+    let entry = guard
+        .hud
+        .entry(address.to_string())
+        .or_insert_with(HudCounters::default);
+
+    let act = action.trim().to_ascii_lowercase();
+    if !entry.saw_action_this_hand {
+        entry.hands_seen += 1;
+        entry.saw_action_this_hand = true;
+        entry.vpip_this_hand = false;
+        entry.pfr_this_hand = false;
+    }
+
+    let voluntary = matches!(
+        act.as_str(),
+        "call" | "bet" | "raise" | "allin" | "all_in"
+    );
+    if voluntary && !entry.vpip_this_hand {
+        entry.vpip_hands += 1;
+        entry.vpip_this_hand = true;
+    }
+
+    let is_raise_like = matches!(act.as_str(), "bet" | "raise" | "allin" | "all_in");
+    if is_preflop && is_raise_like && !entry.pfr_this_hand {
+        entry.pfr_hands += 1;
+        entry.pfr_this_hand = true;
+    }
+
+    match act.as_str() {
+        "bet" | "raise" | "allin" | "all_in" => entry.bets_raises += 1,
+        "call" => entry.calls += 1,
+        _ => {}
+    }
+}
+
+/// Mark end of hand so next actions start a new HUD hand window.
+pub async fn end_hand_for_players(store: &StatsStore, addresses: &[String]) {
+    let mut guard = store.write().await;
+    for addr in addresses {
+        if let Some(entry) = guard.hud.get_mut(addr) {
+            entry.saw_action_this_hand = false;
+            entry.vpip_this_hand = false;
+            entry.pfr_this_hand = false;
+        }
+    }
+}
+
+fn hud_to_stats(address: &str, c: &HudCounters) -> PlayerHudStats {
+    let hands = c.hands_seen.max(1) as f64;
+    let vpip = (c.vpip_hands as f64 / hands) * 100.0;
+    let pfr = (c.pfr_hands as f64 / hands) * 100.0;
+    let aggression_factor = if c.calls == 0 {
+        if c.bets_raises > 0 {
+            c.bets_raises as f64
+        } else {
+            0.0
+        }
+    } else {
+        c.bets_raises as f64 / c.calls as f64
+    };
+    PlayerHudStats {
+        address: address.to_string(),
+        hands_played: c.hands_seen,
+        vpip,
+        pfr,
+        aggression_factor,
+    }
+}
+
+/// Per-player HUD stats for seat tooltips (Issue #55).
+pub async fn get_player_hud(store: &StatsStore, address: &str) -> PlayerHudStats {
+    let guard = store.read().await;
+    if let Some(c) = guard.hud.get(address) {
+        return hud_to_stats(address, c);
+    }
+    // Fall back to hands_played from horizon-indexed stats if available.
+    let hands = guard
+        .players
+        .get(address)
+        .map(|p| p.hands_played)
+        .unwrap_or(0);
+    PlayerHudStats {
+        address: address.to_string(),
+        hands_played: hands,
+        vpip: 0.0,
+        pfr: 0.0,
+        aggression_factor: 0.0,
+    }
+}
+
+/// Replace the cached on-chain rating leaderboard (Issue #70).
+pub async fn set_rating_leaderboard(
+    store: &StatsStore,
+    entries: Vec<RatingEntry>,
+    min_hands: u32,
+) {
+    let mut guard = store.write().await;
+    guard.ratings = entries;
+    guard.ratings_min_hands = min_hands;
+}
+
+/// Read cached rating leaderboard with offset/limit.
+pub async fn get_rating_leaderboard(
+    store: &StatsStore,
+    offset: usize,
+    limit: usize,
+) -> RatingLeaderboardResponse {
+    let guard = store.read().await;
+    let total = guard.ratings.len() as u32;
+    let entries: Vec<RatingEntry> = guard
+        .ratings
+        .iter()
+        .skip(offset)
+        .take(limit.max(1))
+        .cloned()
+        .collect();
+    RatingLeaderboardResponse {
+        entries,
+        min_hands: guard.ratings_min_hands,
+        total,
+    }
+}
+
+/// Seed demo/local ratings when the on-chain contract is not configured.
+pub async fn ensure_demo_ratings(store: &StatsStore) {
+    let mut guard = store.write().await;
+    if !guard.ratings.is_empty() {
+        return;
+    }
+    // Build a synthetic leaderboard from known player stats so the UI works locally.
+    let mut entries: Vec<RatingEntry> = guard
+        .players
+        .values()
+        .map(|p| {
+            let base = 1500u32;
+            let bonus = (p.hands_won as u32).saturating_mul(8);
+            let pen = (p.hands_played.saturating_sub(p.hands_won) as u32).saturating_mul(3);
+            RatingEntry {
+                address: p.address.clone(),
+                rating: base.saturating_add(bonus).saturating_sub(pen).clamp(100, 4000),
+                hands_played: p.hands_played.min(u32::MAX as u64) as u32,
+                hands_won: p.hands_won.min(u32::MAX as u64) as u32,
+            }
+        })
+        .filter(|e| e.hands_played >= guard.ratings_min_hands)
+        .collect();
+    entries.sort_by(|a, b| b.rating.cmp(&a.rating));
+    entries.truncate(50);
+    guard.ratings = entries;
 }
 
 /// Return a cached response, rebuilding it if the TTL has expired.

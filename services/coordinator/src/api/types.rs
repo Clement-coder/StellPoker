@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Shared query parameters for offset/limit paginated endpoints.
+#[derive(Deserialize, ToSchema)]
+pub struct PaginatedQuery {
+    pub offset: Option<u32>,
+    pub limit: Option<u32>,
+}
+
 /// Per-node MPC phase progress for a specific table, returned by
 /// `GET /api/table/:table_id/mpc-status` and included in WebSocket pushes.
 #[derive(Serialize, Clone, ToSchema)]
@@ -69,6 +76,9 @@ pub struct ShowdownResponse {
 pub struct PlayerActionRequest {
     pub action: String,
     pub amount: Option<i128>,
+    /// Monotonically increasing sequence number for (player, table).
+    /// Prevents replay / front-running attacks on betting actions.
+    pub seq: u32,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -153,6 +163,22 @@ pub struct OpenTableInfo {
     pub open_wallet_slots: usize,
 }
 
+/// Multi-table overview entry for the mini-map (Issue #53).
+#[derive(Serialize, ToSchema, Clone)]
+pub struct TableOverviewInfo {
+    pub table_id: u32,
+    pub phase: String,
+    pub max_players: u32,
+    pub seated: usize,
+    pub total_chips: i64,
+    pub stacks: Vec<i64>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct TableOverviewResponse {
+    pub tables: Vec<TableOverviewInfo>,
+}
+
 #[derive(Serialize, ToSchema)]
 pub struct JoinTableResponse {
     pub table_id: u32,
@@ -176,6 +202,17 @@ pub struct LobbySeat {
     pub seat_index: u32,
     pub chain_address: String,
     pub wallet_address: Option<String>,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct RitOptInRequest {
+    pub opt_in: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct RitOptInResponse {
+    pub status: String,
+    pub tx_hash: Option<String>,
 }
 
 #[derive(Deserialize, ToSchema)]

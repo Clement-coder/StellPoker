@@ -19,13 +19,45 @@
             "set_hub",
             "set_rake_bps",
             "set_min_players",
-            "withdraw_rake"
+            "set_max_rebuys",
+            "withdraw_rake",
+            "rebuy"
           ],
           "auth_model": "player_or_committee_or_admin_require_auth",
           "admin_multisig_required": true
         },
+        "DataKey::HandRecord": {
+          "authorized_functions": ["player_action", "claim_timeout", "submit_showdown"],
+          "auth_model": "written_only_on_hand_settlement",
+          "admin_multisig_required": false
+        },
+        "DataKey::HandHistoryMeta": {
+          "authorized_functions": ["player_action", "claim_timeout", "submit_showdown"],
+          "auth_model": "written_only_on_hand_settlement",
+          "admin_multisig_required": false
+        },
+        "DataKey::PlayerTables": {
+          "authorized_functions": ["join_table", "leave_table"],
+          "auth_model": "player_require_auth",
+          "admin_multisig_required": false
+        },
         "DataKey::Paused": {
           "authorized_functions": ["pause", "unpause"],
+          "auth_model": "table_admin_require_auth",
+          "admin_multisig_required": true
+        },
+        "DataKey::Queue": {
+          "authorized_functions": ["join_table", "leave_table", "leave_queue", "get_queue"],
+          "auth_model": "player_require_auth",
+          "admin_multisig_required": false
+        },
+        "DataKey::UpgradeProposal": {
+          "authorized_functions": [
+            "propose_upgrade",
+            "execute_upgrade",
+            "cancel_upgrade",
+            "get_upgrade_proposal"
+          ],
           "auth_model": "table_admin_require_auth",
           "admin_multisig_required": true
         },
@@ -85,6 +117,31 @@
           "authorized_functions": ["register_member"],
           "auth_model": "member_require_auth",
           "admin_multisig_required": false
+        },
+        "RegistryKey::FeePool": {
+          "authorized_functions": ["deposit_rake", "distribute_fees"],
+          "auth_model": "depositor_require_auth_or_permissionless_split",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::PendingReward": {
+          "authorized_functions": ["distribute_fees", "withdraw_rewards"],
+          "auth_model": "permissionless_split_or_member_require_auth",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::PendingTotal": {
+          "authorized_functions": ["distribute_fees", "withdraw_rewards"],
+          "auth_model": "permissionless_split_or_member_require_auth",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::TotalDistributed": {
+          "authorized_functions": ["distribute_fees"],
+          "auth_model": "permissionless_split",
+          "admin_multisig_required": false
+        },
+        "RegistryKey::MinWithdrawal": {
+          "authorized_functions": ["set_min_withdrawal"],
+          "auth_model": "stored_admin_require_auth",
+          "admin_multisig_required": true
         },
         "RegistryKey::Epoch": {
           "authorized_functions": ["create_epoch"],

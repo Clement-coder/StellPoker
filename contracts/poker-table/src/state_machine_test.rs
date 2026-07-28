@@ -26,9 +26,55 @@ extern crate std;
 use crate::betting;
 use crate::types::*;
 use proptest::prelude::*;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, BytesN, Env, Vec};
 use std::format;
 use std::vec::Vec as StdVec;
+
+/// No-op stand-in for the Stellar Game Studio hub. Settling a hand notifies the
+/// hub, so the machine needs a real contract at that address to call into.
+#[contract]
+pub struct GameHubContract;
+
+#[contractimpl]
+impl GameHubContract {
+    pub fn start_game(
+        _env: Env,
+        _game_id: Address,
+        _session_id: u32,
+        _player1: Address,
+        _player2: Address,
+        _player1_points: i128,
+        _player2_points: i128,
+    ) {
+    }
+
+    pub fn end_game(_env: Env, _session_id: u32, _player1_won: bool) {}
+}
+
+/// Register the contracts the betting machine needs and return their addresses
+/// as `(poker_table, game_hub)`.
+///
+/// Settling a hand archives a hand-history record (contract storage) and
+/// notifies the game hub (cross-contract call). Neither is reachable from a
+/// bare `Env`, so every transition has to be driven from inside the
+/// poker-table contract's frame — see [`act`] — exactly as it runs on-chain.
+fn harness(env: &Env) -> (Address, Address) {
+    env.mock_all_auths();
+    let poker = env.register(crate::PokerTableContract, ());
+    let hub = env.register(GameHubContract, ());
+    (poker, hub)
+}
+
+/// Run one betting action inside the poker-table contract's frame.
+fn act(
+    env: &Env,
+    poker: &Address,
+    table: &mut TableState,
+    player: &Address,
+    action: &Action,
+) -> Result<(), PokerTableError> {
+    env.as_contract(poker, || betting::process_action(env, table, player, action))
+}
 
 /// Maximum seated players per table (matches the contract cap).
 const MAX_PLAYERS_PER_TABLE: u32 = 6;
@@ -109,6 +155,7 @@ fn build_preflop_state(
     buy_ins: &[i128],
     small_blind: i128,
     big_blind: i128,
+    game_hub: &Address,
 ) -> TableState {
     let n = buy_ins.len();
     assert!(n >= 2 && n <= MAX_PLAYERS_PER_TABLE as usize);
@@ -125,6 +172,8 @@ fn build_preflop_state(
             all_in: false,
             sitting_out: false,
             seat_index: seat as u32,
+            total_buy_in: bi,
+            rebuy_count: 0,
         });
     }
 
@@ -135,15 +184,18 @@ fn build_preflop_state(
             token: admin.clone(),
             min_buy_in: 0,
             max_buy_in: i128::MAX,
-            small_blind,
-            big_blind,
+            blinds_schedule: BlindsSchedule::fixed(env, small_blind, big_blind),
             min_players: 2,
             max_players: MAX_PLAYERS_PER_TABLE,
             timeout_ledgers: 0,
             committee: admin.clone(),
             verifier: admin.clone(),
-            game_hub: admin.clone(),
+            game_hub: game_hub.clone(),
             rake_bps: 0,
+            max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         },
         phase: GamePhase::Preflop,
         players,
@@ -160,6 +212,13 @@ fn build_preflop_state(
         committee: admin,
         session_id: 0,
         rake_balance: 0,
+        action_deadline: 0,
+        hand_actions: Vec::new(env),
+        rit_state: None,
+        jackpot_balance: 0,
+        last_raise_size: big_blind,
+        current_blind_level: 0,
+        level_started_at: 0,
     };
 
     // Same blind placement and UTG calculation as the public contract:
@@ -230,6 +289,14 @@ fn phase_rank(phase: &GamePhase) -> u8 {
         GamePhase::River => 8,
         GamePhase::Showdown => 9,
         GamePhase::Settlement => 10,
+        // Run-It-Twice is an alternate path taken instead of the normal
+        // Showdown/Settlement sequence when two players go all-in heads-up.
+        // Both showdown runs occupy the same stage as the regular Showdown;
+        // the final pot split occupies the same stage as Settlement.
+        GamePhase::AwaitingRunItTwice => 9,
+        GamePhase::ShowdownRun1 => 9,
+        GamePhase::ShowdownRun2 => 9,
+        GamePhase::RitSettlement => 10,
         // `Dispute` is unreachable in the betting state machine and is
         // assigned the highest rank so any spurious transition fails the
         // monotonicity assertion loudly.
@@ -272,7 +339,9 @@ fn synthesize_legal_action(table: &TableState, intent: Intent) -> Action {
         .expect("current_turn in range");
     let bet = current_bet(table);
     let to_call = bet - curr.bet_this_round;
-    let bb = table.config.big_blind;
+    let bb = crate::game::current_blind_level(table)
+        .expect("valid blind level")
+        .big_blind;
     match intent {
         Intent::Fold => Action::Fold,
         Intent::AllIn => Action::AllIn,
@@ -313,21 +382,51 @@ fn synthesize_legal_action(table: &TableState, intent: Intent) -> Action {
 /// committee performs over `reveal_board` / `commit_deal` in production,
 /// but without ZK proofs — the betting state machine is independent of
 /// proving machinery.
-fn advance_past_dealing(env: &Env, table: &mut TableState) {
-    match table.phase {
-        GamePhase::DealingFlop => {
-            table.phase = GamePhase::Flop;
-            let _ = betting::reset_round(env, table);
+fn advance_past_dealing(env: &Env, poker: &Address, table: &mut TableState) {
+    // `reset_round` can settle the hand outright when everyone is all-in, so it
+    // runs inside the contract frame like the rest of the machine.
+    let next = match table.phase {
+        GamePhase::DealingFlop => GamePhase::Flop,
+        GamePhase::DealingTurn => GamePhase::Turn,
+        GamePhase::DealingRiver => GamePhase::River,
+        _ => return,
+    };
+    table.phase = next;
+    env.as_contract(poker, || {
+        let _ = betting::reset_round(env, table);
+    });
+}
+
+/// Run the machine until it reaches a terminal phase, cycling the generated
+/// intent stream.
+///
+/// The stream is cycled because a six-handed table needs more moves across four
+/// betting rounds than the shortest generated sequence supplies — running out
+/// of intents would look like a stalled machine rather than a short script.
+/// `moves` still counts only real actions, and a hard iteration cap keeps a
+/// genuinely stuck machine from spinning so the caller's assertion is the thing
+/// that reports the failure.
+fn drive_to_terminal(
+    env: &Env,
+    poker: &Address,
+    table: &mut TableState,
+    intents: &[Intent],
+    initial_total: i128,
+    last_rank: &mut u8,
+    moves: &mut u32,
+) {
+    let mut stream = intents.iter().cycle();
+    let mut iterations = 0u32;
+    while !is_terminal(&table.phase)
+        && *moves < MAX_MOVES_BEFORE_TERMINAL
+        && iterations < MAX_MOVES_BEFORE_TERMINAL * 4
+    {
+        iterations += 1;
+        let intent = *stream.next().expect("cycled intent stream is non-empty");
+        advance_past_dealing(env, poker, table);
+        if step(env, poker, table, intent, initial_total, last_rank) {
+            *moves += 1;
         }
-        GamePhase::DealingTurn => {
-            table.phase = GamePhase::Turn;
-            let _ = betting::reset_round(env, table);
-        }
-        GamePhase::DealingRiver => {
-            table.phase = GamePhase::River;
-            let _ = betting::reset_round(env, table);
-        }
-        _ => {}
     }
 }
 
@@ -338,6 +437,7 @@ fn advance_past_dealing(env: &Env, table: &mut TableState) {
 #[allow(clippy::too_many_lines)]
 fn step(
     env: &Env,
+    poker: &Address,
     table: &mut TableState,
     intent: Intent,
     initial_total: i128,
@@ -347,7 +447,7 @@ fn step(
         return false;
     }
     if !is_betting_phase(&table.phase) {
-        advance_past_dealing(env, table);
+        advance_past_dealing(env, poker, table);
         return false;
     }
     let curr = table
@@ -360,7 +460,7 @@ fn step(
 
     let action = synthesize_legal_action(table, intent);
     let addr = curr.address.clone();
-    betting::process_action(env, table, &addr, &action).expect("legal action");
+    act(env, poker, table, &addr, &action).expect("legal action");
 
     // Conservation: `sum(stack) + pot + rake_balance` is invariant
     // across every action AND across every settlement path (`settle_fold_win`
@@ -449,22 +549,15 @@ proptest! {
     ) {
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
+        let (poker, hub) = harness(&env);
 
         let buy_ins = &buy_ins[..n];
-        let mut table = build_preflop_state(&env, buy_ins, 5, 10);
+        let mut table = build_preflop_state(&env, buy_ins, 5, 10, &hub);
         let initial_total: i128 = buy_ins.iter().sum();
         let mut last_rank = phase_rank(&table.phase);
 
         let mut moves = 0u32;
-        for intent in &intents {
-            if is_terminal(&table.phase) {
-                break;
-            }
-            advance_past_dealing(&env, &mut table);
-            if step(&env, &mut table, *intent, initial_total, &mut last_rank) {
-                moves += 1;
-            }
-        }
+        drive_to_terminal(&env, &poker, &mut table, &intents, initial_total, &mut last_rank, &mut moves);
         prop_assert!(
             is_terminal(&table.phase),
             "machine stopped without reaching a terminal state: phase={:?}",
@@ -491,9 +584,10 @@ proptest! {
     ) {
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
+        let (poker, hub) = harness(&env);
 
         let buy_ins = &buy_ins[..n];
-        let mut table = build_preflop_state(&env, buy_ins, 5, 10);
+        let mut table = build_preflop_state(&env, buy_ins, 5, 10, &hub);
         let initial_total: i128 = buy_ins.iter().sum();
         let mut last_rank = phase_rank(&table.phase);
 
@@ -501,8 +595,8 @@ proptest! {
             if is_terminal(&table.phase) {
                 break;
             }
-            advance_past_dealing(&env, &mut table);
-            step(&env, &mut table, *intent, initial_total, &mut last_rank);
+            advance_past_dealing(&env, &poker, &mut table);
+            step(&env, &poker, &mut table, *intent, initial_total, &mut last_rank);
         }
     }
 
@@ -519,9 +613,10 @@ proptest! {
     ) {
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
+        let (poker, hub) = harness(&env);
 
         let buy_ins = &buy_ins[..n];
-        let mut table = build_preflop_state(&env, buy_ins, 5, 10);
+        let mut table = build_preflop_state(&env, buy_ins, 5, 10, &hub);
         let initial_total: i128 = buy_ins.iter().sum();
         let mut last_rank = phase_rank(&table.phase);
 
@@ -529,26 +624,37 @@ proptest! {
             if is_terminal(&table.phase) {
                 break;
             }
-            advance_past_dealing(&env, &mut table);
+            advance_past_dealing(&env, &poker, &mut table);
             if !is_betting_phase(&table.phase) {
                 continue;
             }
 
             let pre_phase = table.phase.clone();
-            let pre_complete = is_round_complete(&table);
             let curr = table.players.get(table.current_turn).unwrap();
             if curr.folded || curr.all_in || curr.stack == 0 {
                 continue;
             }
             let action = synthesize_legal_action(&table, *intent);
             let addr = curr.address.clone();
-            betting::process_action(&env, &mut table, &addr, &action).unwrap();
+            act(&env, &poker, &mut table, &addr, &action).unwrap();
 
+            // Completion is checked *after* the move, because the move that
+            // ends a betting round is what completes it. Bets are still intact
+            // at this point — `reset_round` only runs on the next board reveal
+            // (`advance_past_dealing` here) — so the check reads the state as
+            // it stood at the moment of the transition.
+            let post_complete = is_round_complete(&table);
+            // A fold that leaves one player standing settles the hand
+            // immediately. That short-circuit to `Settlement` is a legal edge
+            // in the phase DAG and is not gated on round completion, since the
+            // remaining bets are never matched.
+            let fold_win = matches!(table.phase, GamePhase::Settlement);
             let advanced_out_of_betting = is_betting_phase(&pre_phase)
                 && !is_betting_phase(&table.phase)
-                && !is_in_dealing_phase(&table.phase);
+                && !is_in_dealing_phase(&table.phase)
+                && !fold_win;
             prop_assert!(
-                pre_complete || !advanced_out_of_betting,
+                post_complete || !advanced_out_of_betting,
                 "phase advanced without round completion: {:?} -> {:?}",
                 pre_phase,
                 table.phase
@@ -573,25 +679,15 @@ proptest! {
     ) {
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
+        let (poker, hub) = harness(&env);
 
         let buy_ins = &buy_ins[..n];
-        let mut table = build_preflop_state(&env, buy_ins, 5, 10);
+        let mut table = build_preflop_state(&env, buy_ins, 5, 10, &hub);
         let initial_total: i128 = buy_ins.iter().sum();
         let mut last_rank = phase_rank(&table.phase);
         let mut moves = 0u32;
 
-        for intent in &intents {
-            if is_terminal(&table.phase) {
-                break;
-            }
-            advance_past_dealing(&env, &mut table);
-            if step(&env, &mut table, *intent, initial_total, &mut last_rank) {
-                moves += 1;
-                if moves >= MAX_MOVES_BEFORE_TERMINAL {
-                    break;
-                }
-            }
-        }
+        drive_to_terminal(&env, &poker, &mut table, &intents, initial_total, &mut last_rank, &mut moves);
         prop_assert!(
             moves <= MAX_MOVES_BEFORE_TERMINAL,
             "machine ran for {} moves without terminating: phase={:?}",
@@ -619,9 +715,10 @@ proptest! {
     ) {
         let env = Env::default();
         env.cost_estimate().budget().reset_unlimited();
+        let (poker, hub) = harness(&env);
 
         let buy_ins = &buy_ins[..n];
-        let mut table = build_preflop_state(&env, buy_ins, 5, 10);
+        let mut table = build_preflop_state(&env, buy_ins, 5, 10, &hub);
         let initial_total: i128 = buy_ins.iter().sum();
         let mut last_rank = phase_rank(&table.phase);
 
@@ -629,7 +726,7 @@ proptest! {
             if is_terminal(&table.phase) {
                 break;
             }
-            advance_past_dealing(&env, &mut table);
+            advance_past_dealing(&env, &poker, &mut table);
             if !is_betting_phase(&table.phase) {
                 continue;
             }
@@ -654,7 +751,7 @@ proptest! {
             );
             let action = synthesize_legal_action(&table, *intent);
             let addr = curr.address.clone();
-            betting::process_action(&env, &mut table, &addr, &action).unwrap();
+            act(&env, &poker, &mut table, &addr, &action).unwrap();
             let now_rank = phase_rank(&table.phase);
             prop_assert!(now_rank >= last_rank, "phase rank went backward");
             last_rank = now_rank;

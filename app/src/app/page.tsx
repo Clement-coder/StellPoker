@@ -7,6 +7,7 @@ import { PixelWorld } from "@/components/PixelWorld";
 import { PixelCat } from "@/components/PixelCat";
 import { PixelChip } from "@/components/PixelChip";
 import { TransactionSimulation } from "@/components/TransactionSimulation";
+import { TokenSelector } from "@/components/TokenSelector";
 import * as api from "@/lib/api";
 import { useJoinTableSimulation } from "@/lib/use-transaction-simulation";
 import {
@@ -18,6 +19,11 @@ import {
   type WalletType,
 } from "@/lib/wallet";
 import { useWalletMonitor } from "@/lib/use-wallet-monitor";
+import {
+  loadOpenTables,
+  tableHref,
+  type OpenTable,
+} from "@/lib/open-tables";
 
 type Screen = "splash" | "connect" | "menu" | "create" | "join";
 const STROOPS_PER_XLM = BigInt("10000000");
@@ -52,12 +58,22 @@ export default function Home() {
   const [availableWallets, setAvailableWallets] = useState<{ type: WalletType; name: string; isInstalled: boolean }[]>([]);
   const [busy, setBusy] = useState(false);
   const [maxPlayers, setMaxPlayers] = useState(2);
+  const [tokenChoice, setTokenChoice] = useState<{ type: string; sacAddress?: string }>({ type: "XLM" });
   const [buyInXlm, setBuyInXlm] = useState(
     formatStroopsToXlm(BigInt("1000000000"))
   );
   const [joinTableId, setJoinTableId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pendingTableId, setPendingTableId] = useState<number | null>(null);
+  const [openTables, setOpenTables] = useState<OpenTable[]>([]);
+  const [lobbyTables, setLobbyTables] = useState<api.OpenTableInfo[]>([]);
+  const [tableLobbies, setTableLobbies] = useState<
+    Record<number, api.TableLobbyResponse>
+  >({});
+  const [loadingTables, setLoadingTables] = useState(false);
+  const [tableSearch, setTableSearch] = useState("");
+  const [filterSeatsOpen, setFilterSeatsOpen] = useState(false);
+  const [filterMyStakes, setFilterMyStakes] = useState(false);
 
   const joinTableSim = useJoinTableSimulation(wallet, () => {
     if (pendingTableId) {
@@ -87,6 +103,20 @@ export default function Home() {
     }
   }, [screen]);
 
+  // Tables this wallet already has open, so a multi-tabling player can drop
+  // straight back into one instead of retyping its ID (#72).
+  useEffect(() => {
+    setOpenTables(wallet ? loadOpenTables(wallet.address) : []);
+  }, [wallet, screen]);
+
+  // Load the browsable open-tables list when entering the join screen.
+  useEffect(() => {
+    if (screen === "join" && wallet) {
+      void loadLobbyTables();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen, wallet]);
+
   // Auto-advance from connect → menu when wallet connects
   useEffect(() => {
     if (screen === "connect" && wallet) {
@@ -101,6 +131,14 @@ export default function Home() {
       setWallet(null);
       setScreen("connect");
       setError("Wallet disconnected. Please reconnect to continue.");
+    },
+    onAccountSwitch: (newAddress) => {
+      // User switched accounts in Freighter — re-initialise the session with
+      // the new address without forcing a full page reload (#21).
+      setWallet((prev) =>
+        prev ? { ...prev, address: newAddress } : null
+      );
+      setError(null);
     },
   });
 
@@ -135,7 +173,8 @@ export default function Home() {
         wallet,
         players,
         solo,
-        buyIn ? buyIn.toString() : undefined
+        buyIn ? buyIn.toString() : undefined,
+        tokenChoice.type === "XLM" ? "XLM" : tokenChoice.sacAddress
       );
 
       if (!solo && buyIn) {
@@ -175,25 +214,81 @@ export default function Home() {
     }
   };
 
-  const handleJoinOpen = async () => {
-    if (!wallet) return;
-    setBusy(true);
-    setError(null);
+  const loadLobbyTables = async () => {
+    setLoadingTables(true);
     try {
       const result = await api.listOpenTables();
-      const first = result.tables[0];
-      if (!first) {
-        setError("No open tables found");
-        return;
+      setLobbyTables(result.tables);
+
+      // Fetch per-seat detail for each table so the search bar can match on
+      // player address and the "my stakes" filter can tell which tables the
+      // connected wallet is already seated at. The bulk /api/tables/open
+      // response doesn't carry seat-level addresses, only counts.
+      const entries = await Promise.all(
+        result.tables.map(async (t) => {
+          try {
+            return [t.table_id, await api.getTableLobby(t.table_id)] as const;
+          } catch {
+            return null;
+          }
+        })
+      );
+      const lobbies: Record<number, api.TableLobbyResponse> = {};
+      for (const entry of entries) {
+        if (entry) lobbies[entry[0]] = entry[1];
       }
-      const query = first.max_players >= 3 ? "?mode=multi" : "?mode=headsup";
-      router.push(`/table/${first.table_id}${query}`);
+      setTableLobbies(lobbies);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Join open table failed");
+      setError(e instanceof Error ? e.message : "Failed to load open tables");
     } finally {
-      setBusy(false);
+      setLoadingTables(false);
     }
   };
+
+  const handleDisconnect = () => {
+    if (wallet) {
+      import("@/lib/wallet").then(({ clearWallet }) => clearWallet(wallet.walletType));
+    }
+    setWallet(null);
+    setScreen("connect");
+    setError(null);
+  };
+
+  const handleJoinRow = (table: api.OpenTableInfo) => {
+    const query = table.max_players >= 3 ? "?mode=multi" : "?mode=headsup";
+    router.push(`/table/${table.table_id}${query}`);
+  };
+
+  const matchesSearch = (table: api.OpenTableInfo, query: string): boolean => {
+    if (!query) return true;
+    const q = query.trim().toLowerCase();
+    if (table.table_id.toString().includes(q)) return true;
+    const lobby = tableLobbies[table.table_id];
+    if (!lobby) return false;
+    return lobby.seats.some(
+      (seat) =>
+        seat.chain_address.toLowerCase().includes(q) ||
+        (seat.wallet_address ?? "").toLowerCase().includes(q)
+    );
+  };
+
+  const isMyTable = (table: api.OpenTableInfo): boolean => {
+    if (!wallet) return false;
+    const lobby = tableLobbies[table.table_id];
+    if (!lobby) return false;
+    return lobby.seats.some(
+      (seat) =>
+        seat.chain_address === wallet.address ||
+        seat.wallet_address === wallet.address
+    );
+  };
+
+  const filteredOpenTables = lobbyTables.filter((t) => {
+    if (!matchesSearch(t, tableSearch)) return false;
+    if (filterSeatsOpen && t.open_wallet_slots <= 0) return false;
+    if (filterMyStakes && !isMyTable(t)) return false;
+    return true;
+  });
 
   const shortAddr = wallet
     ? `${wallet.address.slice(0, 6)}...${wallet.address.slice(-4)}`
@@ -345,10 +440,15 @@ export default function Home() {
             fontFamily: "'Press Start 2P', monospace",
           }}
         >
-          ←
         </button>
 
-{/* Wallet indicator moved below main panel — see after screen content */}
+        {/* Admin Dashboard Navigation link (#29) */}
+        <Link
+          href="/admin"
+          className="absolute top-6 right-6 z-20 text-[10px] px-3 py-2 border border-[#8b6914] bg-[#1a120c] text-[#f1c40f] hover:bg-[#8b6914] hover:text-white transition"
+        >
+          🛡️ ADMIN
+        </Link>
 
         {/* Logo area */}
         <div className="text-center">
@@ -381,7 +481,7 @@ export default function Home() {
         {/* ────── CONNECT SCREEN ────── */}
         {screen === "connect" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -408,13 +508,18 @@ export default function Home() {
               availableWallets.map((w) => (
                 <button
                   key={w.type}
-                  onClick={() => void handleConnect(w.type)}
-                  disabled={connecting !== null || !w.isInstalled}
+                  onClick={() => w.isInstalled ? void handleConnect(w.type) : window.open(
+                    w.type === "freighter"
+                      ? "https://www.freighter.app"
+                      : "https://lobstr.co/universal-wallet",
+                    "_blank", "noopener,noreferrer"
+                  )}
+                  disabled={connecting !== null}
                   className="pixel-btn text-[12px] w-full"
                   style={{
                     padding: "12px 24px",
-                    opacity: !w.isInstalled || connecting !== null ? 0.5 : 1,
-                    background: w.type === "freighter" ? "#1a5276" : "#6c3483",
+                    opacity: connecting !== null ? 0.5 : 1,
+                    background: w.type === "freighter" ? (w.isInstalled ? "#1a5276" : "#2c3e50") : (w.isInstalled ? "#6c3483" : "#2c3e50"),
                     color: "white",
                   }}
                 >
@@ -422,9 +527,22 @@ export default function Home() {
                     ? `CONNECTING ${w.name}...`
                     : w.isInstalled
                       ? `CONNECT ${w.name}`
-                      : `${w.name} NOT DETECTED`}
+                      : `INSTALL ${w.name} ↗`}
                 </button>
               ))
+            )}
+
+            {availableWallets.every((w) => !w.isInstalled) && availableWallets.length > 0 && (
+              <div
+                className="pixel-border-thin w-full p-2 text-[9px]"
+                style={{
+                  background: "rgba(40,10,10,0.5)",
+                  borderColor: "#c0392b",
+                  color: "#e74c3c",
+                }}
+              >
+                NO WALLET DETECTED. INSTALL FREIGHTER OR LOBSTR TO PLAY.
+              </div>
             )}
 
             <div
@@ -443,7 +561,7 @@ export default function Home() {
         {/* ────── MENU SCREEN ────── */}
         {screen === "menu" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -483,7 +601,7 @@ export default function Home() {
         {/* ────── CREATE SCREEN ────── */}
         {screen === "create" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -543,17 +661,22 @@ export default function Home() {
 
             <div className="w-full flex flex-col gap-2">
               <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
-                BUY-IN (XLM)
+                BUY-IN
               </div>
-              <input
-                type="text"
-                value={buyInXlm}
-                onChange={(e) => setBuyInXlm(e.target.value)}
-                placeholder="100"
-                disabled={busy}
-                className="w-full text-center text-[12px]"
-                style={{ padding: "8px 10px" }}
-              />
+
+              <div className="flex items-center gap-3">
+                <TokenSelector value={{ type: tokenChoice.type }} onChange={(v) => setTokenChoice({ type: v.type, sacAddress: v.sacAddress })} />
+                <input
+                  type="text"
+                  value={buyInXlm}
+                  onChange={(e) => setBuyInXlm(e.target.value)}
+                  placeholder="100"
+                  disabled={busy}
+                  className="w-full text-center text-[12px]"
+                  style={{ padding: "8px 10px" }}
+                />
+              </div>
+
               <div className="text-[9px]" style={{ color: "#95a5a6" }}>
                 Multiplayer only.
               </div>
@@ -576,7 +699,7 @@ export default function Home() {
         {/* ────── JOIN SCREEN ────── */}
         {screen === "join" && (
           <div
-            className="p-6 flex flex-col items-center gap-5"
+            className="home-panel p-6 flex flex-col items-center gap-5 w-full"
             style={{
               background: "rgba(12, 10, 24, 0.88)",
               border: "4px solid #c47d2e",
@@ -594,6 +717,35 @@ export default function Home() {
             >
               JOIN TABLE
             </h2>
+
+            {/* Tables already open in this browser */}
+            {openTables.length > 0 && (
+              <div className="w-full flex flex-col gap-2">
+                <div className="text-[10px]" style={{ color: "#c8e6ff" }}>
+                  YOUR TABLES
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {openTables.map((table) => (
+                    <Link
+                      key={table.tableId}
+                      href={tableHref(table)}
+                      className="pixel-border-thin px-3 py-2 text-[10px]"
+                      style={{
+                        background: "rgba(20, 90, 50, 0.35)",
+                        borderColor: "#27ae60",
+                        color: "#eafaf1",
+                        textDecoration: "none",
+                      }}
+                    >
+                      #{table.tableId}
+                    </Link>
+                  ))}
+                </div>
+                <div className="text-[9px]" style={{ color: "#95a5a6" }}>
+                  You can play several tables at once.
+                </div>
+              </div>
+            )}
 
             {/* Join by ID */}
             <div className="flex items-center gap-2 w-full">
@@ -625,22 +777,90 @@ export default function Home() {
               style={{ color: "#4a6a8a" }}
             >
               <div className="flex-1 h-[1px]" style={{ background: "#4a6a8a" }} />
-              <span className="text-[9px]">OR</span>
+              <span className="text-[9px]">OR BROWSE</span>
               <div className="flex-1 h-[1px]" style={{ background: "#4a6a8a" }} />
             </div>
 
-            {/* Join open table */}
-            <button
-              onClick={() => void handleJoinOpen()}
-              disabled={busy || !wallet}
-              className="pixel-btn pixel-btn-blue text-[11px] w-full"
-              style={{
-                padding: "12px 24px",
-                opacity: busy || !wallet ? 0.6 : 1,
-              }}
+            {/* Search + quick filters */}
+            <div className="flex flex-col gap-2 w-full">
+              <input
+                type="text"
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                placeholder="SEARCH BY TABLE ID OR ADDRESS"
+                className="w-full text-center text-[11px]"
+                style={{ padding: "8px 10px" }}
+              />
+              <div className="flex gap-2 justify-center flex-wrap">
+                <button
+                  onClick={() => setFilterSeatsOpen((v) => !v)}
+                  className={`pixel-btn text-[9px] ${filterSeatsOpen ? "pixel-btn-green" : ""}`}
+                  style={{ padding: "6px 10px" }}
+                >
+                  SEATS OPEN
+                </button>
+                <button
+                  onClick={() => setFilterMyStakes((v) => !v)}
+                  disabled={!wallet}
+                  className={`pixel-btn text-[9px] ${filterMyStakes ? "pixel-btn-green" : ""}`}
+                  style={{ padding: "6px 10px", opacity: wallet ? 1 : 0.5 }}
+                >
+                  MY STAKES
+                </button>
+                <button
+                  disabled
+                  title="Tournament tables aren't available yet"
+                  className="pixel-btn text-[9px]"
+                  style={{ padding: "6px 10px", opacity: 0.4, cursor: "not-allowed" }}
+                >
+                  TOURNAMENT
+                </button>
+              </div>
+            </div>
+
+            {/* Results list */}
+            <div
+              className="w-full flex flex-col gap-2 overflow-y-auto"
+              style={{ maxHeight: "220px" }}
+              data-testid="open-tables-list"
             >
-              {busy ? "SEARCHING..." : "JOIN OPEN TABLE"}
-            </button>
+              {loadingTables && (
+                <p className="text-[9px] text-center" style={{ color: "#8a9ab0" }}>
+                  LOADING TABLES...
+                </p>
+              )}
+              {!loadingTables && filteredOpenTables.length === 0 && (
+                <p className="text-[9px] text-center" style={{ color: "#8a9ab0" }}>
+                  NO TABLES MATCH
+                </p>
+              )}
+              {!loadingTables &&
+                filteredOpenTables.map((t) => (
+                  <div
+                    key={t.table_id}
+                    className="flex items-center justify-between gap-2 text-[10px]"
+                    style={{
+                      padding: "8px 10px",
+                      background: "rgba(0,0,0,0.25)",
+                      border: "2px solid #2a4a6a",
+                    }}
+                  >
+                    <span style={{ color: "#ffc078" }}>#{t.table_id}</span>
+                    <span style={{ color: "#8a9ab0" }}>
+                      {t.max_players - t.open_wallet_slots}/{t.max_players} SEATED
+                      {isMyTable(t) ? " · YOU" : ""}
+                    </span>
+                    <button
+                      onClick={() => handleJoinRow(t)}
+                      disabled={busy || !wallet}
+                      className="pixel-btn pixel-btn-blue text-[9px]"
+                      style={{ padding: "6px 12px" }}
+                    >
+                      JOIN
+                    </button>
+                  </div>
+                ))}
+            </div>
           </div>
         )}
 
@@ -654,10 +874,10 @@ export default function Home() {
           </div>
         )}
 
-          {/* Wallet status — centered below panel with dim pulse */}
+          {/* Wallet status — address + disconnect button */}
         {wallet ? (
           <div
-            className="pixel-border-thin px-3 py-1"
+            className="flex items-center gap-2 pixel-border-thin px-3 py-1"
             style={{
               background: "rgba(39, 174, 96, 0.15)",
               fontSize: "9px",
@@ -665,7 +885,23 @@ export default function Home() {
               animation: "walletPulse 3s ease-in-out infinite",
             }}
           >
-            {walletLabel}
+            <span title={wallet.address}>{walletLabel}</span>
+            <button
+              onClick={handleDisconnect}
+              title="Disconnect wallet"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "#e74c3c",
+                fontFamily: "'Press Start 2P', monospace",
+                fontSize: "8px",
+                padding: "0 0 0 6px",
+                lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
           </div>
         ) : screen !== "connect" ? (
           <button
@@ -685,13 +921,13 @@ export default function Home() {
         ) : null}
 
         {/* Cats at bottom */}
-        <div className="fixed bottom-[12%] left-[6%] z-[5]">
+        <div className="deco-cat fixed bottom-[12%] left-[6%] z-[5]">
           <PixelCat sprite={19} size={80} />
         </div>
-        <div className="fixed bottom-[4%] left-[38%] z-[5]">
+        <div className="deco-cat fixed bottom-[4%] left-[38%] z-[5]">
           <PixelCat sprite={18} size={96} />
         </div>
-        <div className="fixed bottom-[12%] right-[6%] z-[5]">
+        <div className="deco-cat fixed bottom-[12%] right-[6%] z-[5]">
           <PixelCat sprite={20} size={96} flipped />
         </div>
 

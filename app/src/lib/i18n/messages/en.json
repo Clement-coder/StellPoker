@@ -1,0 +1,123 @@
+{
+  "app": {
+    "title": "Poker on Stellar",
+    "back": "← Back",
+    "loading": "Loading…"
+  },
+  "nav": {
+    "history": "HISTORY",
+    "keys": "KEYS [?]",
+    "chat": "CHAT",
+    "tables": "TABLES",
+    "stats": "STATS",
+    "language": "LANGUAGE"
+  },
+  "table": {
+    "title": "TABLE #{id}",
+    "hand": "HAND #{n}",
+    "waitingToJoin": "WAITING TO JOIN...",
+    "connectWallet": "CONNECT WALLET",
+    "emptySeat": "EMPTY SEAT",
+    "mpcStatus": "MPC: 3/3 NODES | TACEO CO-NOIR REP3",
+    "viewTx": "VIEW TX ↗",
+    "explorer": "EXPLORER ↗",
+    "joinTable": "JOIN TABLE"
+  },
+  "seat": {
+    "you": "— YOU —",
+    "aiBot": "— AI BOT —",
+    "yourTurn": "▼ YOUR TURN ▼",
+    "theirTurn": "▼ THEIR TURN ▼",
+    "winner": "★ WINNER ★",
+    "chips": "CHIPS",
+    "bet": "BET",
+    "folded": "FOLDED",
+    "allIn": "ALL IN!",
+    "editAlias": "Change your alias",
+    "edit": "[EDIT]",
+    "dealer": "[D]"
+  },
+  "stats": {
+    "title": "Onchain Stats",
+    "global": "Global",
+    "handsPlayed": "Hands Played",
+    "biggestPot": "Biggest Pot",
+    "playersJoined": "Players Joined",
+    "leaderboard": "Leaderboard",
+    "ratingLeaderboard": "ELO Ratings",
+    "noHands": "No hands played yet.",
+    "player": "Player",
+    "handsWon": "Hands Won",
+    "rating": "Rating",
+    "rank": "Rank",
+    "cachedAt": "Cached at {time} · refreshes every 30s",
+    "vpip": "VPIP",
+    "pfr": "PFR",
+    "aggression": "AF",
+    "hands": "Hands",
+    "loadingStats": "Loading stats…",
+    "minHandsNote": "Leaderboard requires minimum hands played on-chain."
+  },
+  "minimap": {
+    "title": "TABLE OVERVIEW",
+    "collapse": "HIDE",
+    "expand": "MAP",
+    "seats": "{seated}/{max} seats",
+    "chips": "{chips} chips",
+    "phase": "Phase: {phase}",
+    "current": "YOU ARE HERE",
+    "empty": "No tables found",
+    "refresh": "REFRESH"
+  },
+  "home": {
+    "connect": "CONNECT WALLET",
+    "createTable": "CREATE TABLE",
+    "joinOpen": "JOIN OPEN TABLE",
+    "playSolo": "SOLO VS AI",
+    "viewStats": "VIEW STATS"
+  },
+  "actions": {
+    "fold": "FOLD",
+    "check": "CHECK",
+    "call": "CALL",
+    "bet": "BET",
+    "raise": "RAISE",
+    "allIn": "ALL-IN",
+    "deal": "DEAL CARDS"
+  },
+  "settings": {
+    "volume": "VOLUME",
+    "language": "LANGUAGE",
+    "english": "English",
+    "spanish": "Español",
+    "logout": "LOG OUT",
+    "autoDetect": "Auto (browser)"
+  },
+  "dealer": {
+    "shuffling": "SHUFFLING & GENERATING DEAL PROOF... (~30-60s){timer}",
+    "revealProof": "GENERATING REVEAL PROOF... (~20-40s){timer}",
+    "showdown": "VERIFYING SHOWDOWN — THIS TAKES 2-4 MINUTES. PLEASE WAIT.{timer}",
+    "oneMoment": "One moment...{timer}",
+    "dealingFlop": "Betting round complete. Dealer is revealing the flop...",
+    "dealingTurn": "Betting round complete. Dealer is revealing the turn...",
+    "dealingRiver": "Betting round complete. Dealer is revealing the river...",
+    "resolvingShowdown": "Betting complete. Dealer is resolving showdown...",
+    "joinPrompt": "On-chain seats are {seats}. Click JOIN TABLE to take a seat with this wallet.",
+    "soloStart": "Solo vs AI uses fake chips (100 each). Click DEAL CARDS to start.",
+    "headsUpWait": "Two-player mode needs 2 joined wallets. Share table ID and wait for one join.",
+    "headsUpReady": "Heads-up is ready. Click DEAL CARDS.",
+    "multiWait": "3-6 player mode needs at least 3 joined wallets.",
+    "multiReady": "Multi-player table is ready. Click DEAL CARDS.",
+    "dealing": "Cards are being dealt.",
+    "preflop": "Preflop is live. Place your bet; dealer auto-reveals next street.",
+    "flop": "Flop is out. Place your bet; dealer auto-reveals turn.",
+    "turn": "Turn is out. Place your bet; dealer auto-reveals river.",
+    "river": "River is out. Final betting round; dealer auto-runs showdown.",
+    "showdownLive": "Showdown in progress.",
+    "youWin": "Hand complete. YOU WIN!",
+    "aiWins": "Hand complete. AI WINS!",
+    "winner": "Hand complete. Winner: {addr}.",
+    "handComplete": "Hand complete. Start the next hand when ready.",
+    "ready": "Ready when you are."
+  }
+}

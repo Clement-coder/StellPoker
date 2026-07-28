@@ -21,9 +21,15 @@ import {
 import { useWalletMonitor } from "@/lib/use-wallet-monitor";
 import { GameBoyButton, GameBoyModal } from "./GameBoyModal";
 import { HandHistoryPanel } from "./HandHistoryPanel";
+import { HandReplayer } from "./HandReplayer";
 import { TransactionSimulation } from "./TransactionSimulation";
 import { MpcNodeIndicator } from "./MpcNodeIndicator";
+import { TableTabs } from "./TableTabs";
 import { ThemeSelector } from "./ThemeSelector";
+import { Skeleton } from "./Skeleton";
+import { TableMiniMap } from "./TableMiniMap";
+import { LanguageSelector } from "./LanguageSelector";
+import { useI18n, useT } from "@/lib/i18n/context";
 import { usePokerActions } from "@/lib/use-poker-actions";
 import { getDealerLine } from "@/lib/dealer-lines";
 import { subscribePokerTableEvents } from "@/lib/events";
@@ -40,6 +46,9 @@ import {
   useTurnNotification,
   requestPermissionOnJoin,
 } from "@/lib/use-notifications";
+import { useTutorial } from "@/lib/use-tutorial";
+import { TutorialOverlay, TutorialHelpButton } from "./TutorialOverlay";
+import { playSound } from "@/lib/sound-engine";
 
 type ActiveRequest = "deal" | "flop" | "turn" | "river" | "showdown" | null;
 type PlayMode = "single" | "headsup" | "multi";
@@ -97,6 +106,8 @@ function mapOnChainPhase(phase: string): GamePhase | null {
 
 export function Table({ tableId, initialPlayMode }: TableProps) {
   const router = useRouter();
+  const t = useT();
+  const { locale } = useI18n();
   const [game, setGame] = useState<GameState>(() => createInitialState(tableId));
   const [wallet, setWallet] = useState<WalletSession | null>(null);
   const [playMode, setPlayMode] = useState<PlayMode>(initialPlayMode ?? "headsup");
@@ -108,9 +119,11 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
   const [onChainPhase, setOnChainPhase] = useState<string>("unknown");
   const [winnerAddress, setWinnerAddress] = useState<string | null>(null);
   const [lobby, setLobby] = useState<api.TableLobbyResponse | null>(null);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(true);
   const [botLine, setBotLine] = useState<string | null>(null);
   const [gameboyOpen, setGameboyOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [loadingSkeletonTest, setLoadingSkeletonTest] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<HandHistoryEntry[]>(() =>
     loadHandHistory(tableId)
   );
@@ -148,6 +161,47 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
   // Issue #47: browser notification + sound when it becomes the user's turn.
   useTurnNotification({ isMyTurn, tableName: `Table #${tableId}` });
 
+  // Issue #61: tutorial overlay for new players.
+  const tutorial = useTutorial();
+
+  // Issue #63: sound effects
+  // Ref to track the previous phase so we only fire on transitions.
+  const prevPhaseRef = useRef<string>("");
+  const prevBoardCountRef = useRef<number>(0);
+  const prevWinnerRef = useRef<string | null>(null);
+
+  // Card shuffle when deal starts (waiting → preflop)
+  useEffect(() => {
+    const phase = game.phase;
+    if (prevPhaseRef.current !== phase) {
+      if (phase === "preflop" && prevPhaseRef.current === "waiting") {
+        void playSound("shuffle");
+      }
+      prevPhaseRef.current = phase;
+    }
+  }, [game.phase]);
+
+  // Card flip when community cards are revealed (board grows)
+  useEffect(() => {
+    const count = game.boardCards.length;
+    if (count > prevBoardCountRef.current) {
+      // Stagger one flip sound per new card
+      const newCards = count - prevBoardCountRef.current;
+      for (let i = 0; i < newCards; i++) {
+        setTimeout(() => void playSound("flip"), i * 110);
+      }
+    }
+    prevBoardCountRef.current = count;
+  }, [game.boardCards.length]);
+
+  // Winner celebration when a winner is determined
+  useEffect(() => {
+    if (winnerAddress && winnerAddress !== prevWinnerRef.current) {
+      void playSound("winner");
+    }
+    prevWinnerRef.current = winnerAddress;
+  }, [winnerAddress]);
+
   const isWalletSeated = !!wallet && !!userPlayer;
   const seatedAddresses = game.players
     .filter((p) => isStellarAddress(p.address))
@@ -168,6 +222,9 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
       if (lobbyState) {
         setLobby(lobbyState);
       }
+
+      // Hide skeleton after first successful sync
+      setShowSkeleton(false);
 
       const phaseRaw = typeof parsed.phase === "string" ? parsed.phase : null;
       if (phaseRaw) {
@@ -557,6 +614,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
     winnerAddress,
     userAddress,
     lobby,
+    locale,
   });
 
   // Keyboard shortcuts listener
@@ -769,10 +827,34 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
   return (
     <PixelWorld>
-      <div className="min-h-screen flex flex-col items-center gap-4 p-4 pt-6 relative z-[10]">
+      <div className="min-h-screen flex flex-col items-center gap-4 p-2 sm:p-4 pt-4 sm:pt-6 relative z-[10]">
+        {/* Switcher for a player sitting at several tables at once (#72) */}
+        {showSkeleton ? (
+          <div className="w-full max-w-3xl p-6">
+            <div className="flex gap-4">
+              <div style={{ width: 220 }}>
+                <Skeleton height="18px" className="mb-3" />
+                <Skeleton height="140px" className="mb-2" />
+                <div className="flex gap-2 mt-2"><Skeleton width="60px" height="24px" /><Skeleton width="60px" height="24px" /></div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <Skeleton height="18px" className="mb-3" />
+                <Skeleton height="220px" className="mb-4" />
+                <div className="grid grid-cols-3 gap-2"><Skeleton height="40px" /><Skeleton height="40px" /><Skeleton height="40px" /></div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <TableTabs
+            activeTableId={tableId}
+            activeMode={playMode}
+            address={userAddress ?? null}
+          />
+        )}
+
         {/* Header bar */}
-        <div className="w-full max-w-3xl flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="table-header w-full max-w-3xl flex items-center justify-between flex-wrap gap-2">
+          <div className="nav-links flex items-center gap-2 sm:gap-3 flex-wrap">
             <Link
               href="/"
               className="text-[24px]"
@@ -792,7 +874,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                 textShadow: "2px 2px 0 #2c3e50",
               }}
             >
-              TABLE #{tableId}
+              {t("table.title", { id: tableId })}
             </h1>
             <GameBoyButton onClick={() => setGameboyOpen(true)} />
             <button
@@ -808,7 +890,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
               title="Hand History"
             >
-              HISTORY
+              {t("nav.history")}
             </button>
             <button
               onClick={() => setShortcutsOpen(true)}
@@ -823,14 +905,16 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
               title="Keyboard Shortcuts"
             >
-              KEYS [?]
+              {t("nav.keys")}
             </button>
+            <TutorialHelpButton onClick={tutorial.open} />
             <ThemeSelector />
+            <LanguageSelector variant="header" />
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="table-header-right flex items-center gap-2 sm:gap-3">
             <div className="text-[9px]" style={{ color: "#c8e6ff" }}>
-              HAND #{game.handNumber} | {game.phase.toUpperCase()}
+              {t("table.hand", { n: game.handNumber })} | {game.phase.toUpperCase()}
             </div>
             <MpcNodeIndicator tableId={tableId} phase={game.phase} />
 
@@ -853,7 +937,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     textShadow: "1px 1px 0 rgba(0,0,0,0.5)",
                   }}
                 >
-                  {game.lastTxHash ? "VIEW TX ↗" : "EXPLORER ↗"}
+                  {game.lastTxHash ? t("table.viewTx") : t("table.explorer")}
                 </a>
               );
             })()}
@@ -876,7 +960,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
 
         {/* Dealer line */}
         <div
-          className="w-full max-w-3xl pixel-border-thin px-4 py-2"
+          className="dealer-line w-full max-w-3xl pixel-border-thin px-3 sm:px-4 py-2"
           style={{
             background: loading
               ? "rgba(40, 20, 8, 0.9)"
@@ -938,9 +1022,9 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         )}
 
         {/* ═══ THE POKER TABLE ═══ */}
-        <div className="w-full max-w-3xl relative" style={{ minHeight: "400px" }}>
+        <div className="table-container w-full max-w-3xl relative" style={{ minHeight: "400px" }}>
           <div
-            className="pixel-border relative w-full flex flex-col items-center justify-center gap-4"
+            className="table-felt pixel-border relative w-full flex flex-col items-center justify-center gap-4"
             style={{
               background:
                 "radial-gradient(ellipse at center, var(--felt-light) 0%, var(--felt-mid) 40%, var(--felt-dark) 100%)",
@@ -959,7 +1043,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             />
 
             {/* ── OPPONENTS (top) ── */}
-            <div className="flex flex-wrap gap-6 items-end justify-center">
+            <div className="opponents-row flex flex-wrap gap-4 sm:gap-6 items-end justify-center">
               {game.players
                 .filter((p) => !userAddress || p.address !== userAddress)
                 .map((player) => (
@@ -976,6 +1060,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     activeEmote={seatEmotes[player.seat]}
                     boardCards={game.boardCards}
                     gamePhase={game.phase}
+                    showStatsTooltip={playMode !== "single"}
                   />
                 ))}
 
@@ -1027,7 +1112,13 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                   myBet={displayMyBet}
                   myStack={displayMyStack}
                   pot={displayPot}
-                  onAction={handleAction}
+                  onAction={(action, amount) => {
+                    // Issue #63: chip sound on bet/raise/call/allin
+                    if (["bet", "raise", "call", "allin"].includes(action)) {
+                      void playSound("chip");
+                    }
+                    return handleAction(action, amount);
+                  }}
                   onChainConfirmed={game.onChainConfirmed}
                   canStartHand={canStartHand}
                   canResolveShowdown={!!wallet}
@@ -1041,7 +1132,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
             </div>
 
             {/* ── YOU (bottom) ── */}
-            <div className="flex gap-4 items-start">
+            <div className="user-seat-row flex gap-4 items-start justify-center">
               {userPlayer ? (
                 <PlayerSeat
                   player={userPlayer}
@@ -1073,7 +1164,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
                     <Card faceDown size="md" />
                   </div>
                   <div className="text-[9px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                    {wallet ? "WAITING TO JOIN..." : "CONNECT WALLET"}
+                    {wallet ? t("table.waitingToJoin") : t("table.connectWallet")}
                   </div>
                 </div>
               )}
@@ -1082,7 +1173,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         </div>
 
         {/* MPC Status footer */}
-        <div className="flex flex-col items-center gap-1 mt-2">
+        <div className="mpc-footer flex flex-col items-center gap-1 mt-2">
           <div className="flex items-center gap-2">
             <div
               style={{
@@ -1093,7 +1184,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
               }}
             />
             <span className="text-[8px]" style={{ color: "#7f8c8d" }}>
-              MPC: 3/3 NODES | TACEO CO-NOIR REP3
+              {t("table.mpcStatus")}
             </span>
           </div>
           {game.lastTxHash && (
@@ -1118,10 +1209,10 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           )}
         </div>
 
-        <div className="fixed bottom-0 left-[5%] z-[5]" style={{ transform: 'translateY(15%)' }}>
+        <div className="deco-cat fixed bottom-0 left-[5%] z-[5]" style={{ transform: 'translateY(15%)' }}>
           <PixelCat sprite={17} size={36} />
         </div>
-        <div className="fixed bottom-0 right-[5%] z-[5]" style={{ transform: 'translateY(10%)' }}>
+        <div className="deco-cat fixed bottom-0 right-[5%] z-[5]" style={{ transform: 'translateY(10%)' }}>
           <PixelCat sprite={21} size={48} flipped />
         </div>
       </div>
@@ -1136,7 +1227,11 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         entries={historyEntries}
+        onReplay={(entry) => setReplayEntry(entry)}
       />
+
+      {/* Issue #53 — collapsible multi-table overview */}
+      <TableMiniMap currentTableId={tableId} defaultCollapsed />
 
       {shortcutsOpen && (
         <div
@@ -1189,7 +1284,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           setChatOpen((prev) => !prev);
           setNewMessagesCount(0);
         }}
-        className="pixel-btn pixel-btn-blue text-[9px] fixed bottom-4 right-4 z-40"
+        className="chat-toggle-btn pixel-btn pixel-btn-blue text-[9px] fixed bottom-4 right-4 z-40"
         style={{ padding: "8px 12px" }}
       >
         CHAT {newMessagesCount > 0 ? `(${newMessagesCount})` : ""}
@@ -1198,7 +1293,7 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
       {/* Floating Chat Drawer */}
       {chatOpen && (
         <div
-          className="pixel-border-thin fixed bottom-16 right-4 z-40 flex flex-col w-72 h-64 p-3 gap-2"
+          className="chat-drawer pixel-border-thin fixed bottom-16 right-4 z-40 flex flex-col w-72 h-64 p-3 gap-2"
           style={{
             background: "rgba(20, 12, 8, 0.95)",
             borderColor: "var(--ui-border)",
@@ -1348,6 +1443,26 @@ export function Table({ tableId, initialPlayMode }: TableProps) {
           }}
         />
       )}
+
+      {/* Issue #62: Hand replayer */}
+      <HandReplayer
+        entry={replayEntry}
+        onClose={() => setReplayEntry(null)}
+      />
+
+      {/* Issue #61: Tutorial overlay */}
+      <TutorialOverlay
+        isOpen={tutorial.isOpen}
+        currentStep={tutorial.currentStep}
+        currentIndex={tutorial.currentIndex}
+        totalSteps={tutorial.totalSteps}
+        isLastStep={tutorial.isLastStep}
+        isFirstStep={tutorial.isFirstStep}
+        onClose={tutorial.close}
+        onNext={tutorial.next}
+        onPrev={tutorial.prev}
+        onGoTo={tutorial.goTo}
+      />
     </PixelWorld>
   );
 }

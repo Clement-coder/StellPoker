@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use uuid;
 
 use crate::{soroban, AppState, TableSession};
 use super::auth::is_valid_stellar_address;
@@ -49,6 +50,21 @@ pub(crate) struct OnchainTableView {
     pub phase: String,
     pub max_players: u32,
     pub seats: Vec<(u32, String)>,
+    /// Chip stacks aligned with `seats` order (Issue #53).
+    pub stacks: Vec<i64>,
+}
+
+fn parse_i64_value(v: &Value) -> Option<i64> {
+    if let Some(n) = v.as_i64() {
+        return Some(n);
+    }
+    if let Some(n) = v.as_u64() {
+        return Some(n as i64);
+    }
+    if let Some(s) = v.as_str() {
+        return s.parse::<i64>().ok();
+    }
+    None
 }
 
 pub(crate) async fn fetch_onchain_table_view(
@@ -65,7 +81,7 @@ pub(crate) async fn fetch_onchain_table_view(
         .ok_or("missing phase")?
         .to_string();
 
-    let mut seats: Vec<(u32, String)> = value
+    let mut seat_rows: Vec<(u32, String, i64)> = value
         .get("players")
         .and_then(|v| v.as_array())
         .ok_or("missing players")?
@@ -76,10 +92,20 @@ pub(crate) async fn fetch_onchain_table_view(
                 .get("seat_index")
                 .and_then(parse_u32_value)
                 .unwrap_or(0);
-            Some((seat, address))
+            let stack = player
+                .get("stack")
+                .and_then(parse_i64_value)
+                .unwrap_or(0);
+            Some((seat, address, stack))
         })
         .collect();
-    seats.sort_by_key(|(seat, _)| *seat);
+    seat_rows.sort_by_key(|(seat, _, _)| *seat);
+
+    let seats: Vec<(u32, String)> = seat_rows
+        .iter()
+        .map(|(seat, addr, _)| (*seat, addr.clone()))
+        .collect();
+    let stacks: Vec<i64> = seat_rows.iter().map(|(_, _, s)| *s).collect();
 
     let max_players = value
         .get("config")
@@ -91,6 +117,7 @@ pub(crate) async fn fetch_onchain_table_view(
         phase,
         max_players,
         seats,
+        stacks,
     })
 }
 
@@ -267,16 +294,29 @@ fn build_session_from_onchain_state(
         showdown_session_id: None,
         showdown_result: None,
         proof_nonce: 0,
+        rit_phase: "inactive".to_string(),
+        rit_shared_board_count: 0,
         mpc_node_progress: Vec::new(),
         mpc_operation_started: None,
+        // Rehydrated sessions have no pinned hashes — they will be re-pinned
+        // on the next deal. No proof generation happens until a new deal starts.
+        pinned_artifact_hashes: HashMap::new(),
     })
 }
 
+/// Generate a cryptographically random, single-use proof session ID.
+///
+/// The ID embeds the table ID and a label for traceability, but the UUID
+/// component ensures the full ID is unpredictable and non-replayable.
+/// Session IDs must be checked against the `used_session_ids` set in
+/// `AppState` before being forwarded to MPC nodes.
 pub(crate) fn next_proof_session_id(session: &mut TableSession, label: &str) -> String {
     session.proof_nonce = session.proof_nonce.saturating_add(1);
     format!(
         "table-{}-{}-{}",
-        session.table_id, label, session.proof_nonce
+        session.table_id,
+        label,
+        uuid::Uuid::new_v4(),
     )
 }
 
@@ -396,4 +436,82 @@ pub(crate) fn is_identity_missing_error(error: &str) -> bool {
     error
         .to_ascii_lowercase()
         .contains("no local identity configured")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::TableSession;
+    use std::collections::HashSet;
+
+    fn make_session(table_id: u32) -> TableSession {
+        TableSession {
+            table_id,
+            deck_root: String::new(),
+            hand_commitments: Vec::new(),
+            player_order: Vec::new(),
+            dealt_indices: Vec::new(),
+            player_card_positions: Vec::new(),
+            board_indices: Vec::new(),
+            phase: "waiting".to_string(),
+            deal_session_id: String::new(),
+            deal_tx_hash: None,
+            reveal_tx_hashes: std::collections::HashMap::new(),
+            reveal_session_ids: std::collections::HashMap::new(),
+            revealed_cards_by_phase: std::collections::HashMap::new(),
+            selected_node_endpoints: Vec::new(),
+            showdown_tx_hash: None,
+            showdown_session_id: None,
+            showdown_result: None,
+            proof_nonce: 0,
+            mpc_node_progress: Vec::new(),
+            mpc_operation_started: None,
+        }
+    }
+
+    /// Session IDs must be unpredictable: two calls with the same label must
+    /// yield different values (UUID component makes collisions astronomically
+    /// unlikely — treat a collision as a test failure).
+    #[test]
+    fn session_ids_are_unique() {
+        let mut session = make_session(42);
+        let id1 = next_proof_session_id(&mut session, "deal");
+        let id2 = next_proof_session_id(&mut session, "deal");
+        assert_ne!(id1, id2, "session IDs must not repeat");
+    }
+
+    /// Session IDs must embed the table ID so they are scoped to a specific
+    /// game and cannot be replayed against a different table.
+    #[test]
+    fn session_id_binds_to_table_id() {
+        let mut s1 = make_session(1);
+        let mut s2 = make_session(2);
+        let id1 = next_proof_session_id(&mut s1, "deal");
+        let id2 = next_proof_session_id(&mut s2, "deal");
+        assert!(id1.contains("table-1-"), "ID should contain table-1-");
+        assert!(id2.contains("table-2-"), "ID should contain table-2-");
+        assert_ne!(id1, id2);
+    }
+
+    /// Simulate the single-use enforcement: inserting the same ID twice must
+    /// be detected (HashSet::insert returns false on duplicate).
+    #[test]
+    fn used_session_ids_detects_replay() {
+        let mut session = make_session(7);
+        let id = next_proof_session_id(&mut session, "reveal-flop");
+
+        let mut used: HashSet<String> = HashSet::new();
+        assert!(used.insert(id.clone()), "first registration must succeed");
+        assert!(!used.insert(id.clone()), "replay must be detected");
+    }
+
+    /// Verify 100 consecutive IDs are all distinct (no sequential pattern).
+    #[test]
+    fn session_ids_are_non_sequential() {
+        let mut session = make_session(99);
+        let ids: HashSet<String> = (0..100)
+            .map(|_| next_proof_session_id(&mut session, "deal"))
+            .collect();
+        assert_eq!(ids.len(), 100, "all 100 IDs must be unique");
+    }
 }

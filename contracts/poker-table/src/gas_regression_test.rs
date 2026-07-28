@@ -103,8 +103,7 @@ fn cfg(g: &G) -> TableConfig {
         token: g.token.address.clone(),
         min_buy_in: 100,
         max_buy_in: 1000,
-        small_blind: 5,
-        big_blind: 10,
+        blinds_schedule: BlindsSchedule::fixed(&g.env, 5, 10),
         min_players: 2,
         max_players: 6,
         timeout_ledgers: 100,
@@ -112,6 +111,10 @@ fn cfg(g: &G) -> TableConfig {
         verifier: g.verifier.clone(),
         game_hub,
         rake_bps: 0,
+        max_rebuys: 0,
+        jackpot_rake_share_bps: 0,
+        min_bad_beat_category: 7,
+        min_bad_beat_rank: 12,
     }
 }
 
@@ -146,7 +149,7 @@ fn mock_deal(g: &G, table_id: u32, n: u32) {
 fn measure<F: FnOnce()>(g: &G, f: F) -> u64 {
     g.env.cost_estimate().budget().reset_unlimited();
     f();
-    g.env.cost_estimate().budget().cpu_instruction_count()
+    g.env.cost_estimate().budget().cpu_instruction_cost()
 }
 
 fn check(label: &str, cost: u64, budget: u64) {
@@ -231,7 +234,7 @@ fn gas_player_action_call() {
     let actor = table.players.get(table.current_turn).unwrap();
 
     let cost = measure(&g, || {
-        g.client.player_action(&table_id, &actor.address, &Action::Call);
+        g.client.player_action(&table_id, &actor.address, &1u32, &Action::Call);
     });
     check("player_action(Call)", cost, BUDGET_PLAYER_ACTION);
 }
@@ -249,7 +252,7 @@ fn gas_player_action_fold() {
     let actor = table.players.get(table.current_turn).unwrap();
 
     let cost = measure(&g, || {
-        g.client.player_action(&table_id, &actor.address, &Action::Fold);
+        g.client.player_action(&table_id, &actor.address, &1u32, &Action::Fold);
     });
     check("player_action(Fold)", cost, BUDGET_PLAYER_ACTION);
 }
@@ -266,7 +269,7 @@ fn gas_reveal_board() {
     // advance to DealingFlop: SB calls
     let table = g.client.get_table(&table_id);
     let actor = table.players.get(table.current_turn).unwrap();
-    g.client.player_action(&table_id, &actor.address, &Action::Call);
+    g.client.player_action(&table_id, &actor.address, &1u32, &Action::Call);
 
     let cards: Vec<u32> = Vec::from_array(&g.env, [10, 20, 30]);
     let idxs: Vec<u32> = Vec::from_array(&g.env, [4, 5, 6]);
@@ -317,8 +320,7 @@ fn gas_withdraw_rake() {
         token: g.token.address.clone(),
         min_buy_in: 100,
         max_buy_in: 100_000,
-        small_blind: 100,
-        big_blind: 200,
+        blinds_schedule: BlindsSchedule::fixed(&g.env, 100, 200),
         min_players: 2,
         max_players: 6,
         timeout_ledgers: 100,
@@ -326,6 +328,10 @@ fn gas_withdraw_rake() {
         verifier: g.verifier.clone(),
         game_hub,
         rake_bps: 500,
+        max_rebuys: 0,
+        jackpot_rake_share_bps: 0,
+        min_bad_beat_category: 7,
+        min_bad_beat_rank: 12,
     };
     let table_id = g.client.create_table(&g.admin, &config);
     mint_and_join(&g, table_id, 5000);
@@ -336,7 +342,7 @@ fn gas_withdraw_rake() {
     // fold to generate rake
     let table = g.client.get_table(&table_id);
     let folder = table.players.get(table.current_turn).unwrap();
-    g.client.player_action(&table_id, &folder.address, &Action::Fold);
+    g.client.player_action(&table_id, &folder.address, &1u32, &Action::Fold);
 
     let cost = measure(&g, || { g.client.withdraw_rake(&table_id); });
     check("withdraw_rake", cost, BUDGET_WITHDRAW_RAKE);

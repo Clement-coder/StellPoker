@@ -1,5 +1,6 @@
 import type { GamePhase } from "@/lib/game-state";
 import type { TableLobbyResponse } from "@/lib/api";
+import { translate, type Locale, DEFAULT_LOCALE } from "@/lib/i18n";
 
 type ActiveRequest = "deal" | "flop" | "turn" | "river" | "showdown" | null;
 type PlayMode = "single" | "headsup" | "multi";
@@ -23,7 +24,13 @@ export function getDealerLine(opts: {
   winnerAddress: string | null;
   userAddress: string | undefined;
   lobby: TableLobbyResponse | null;
+  /** Active UI locale (Issue #60). */
+  locale?: Locale;
 }): string {
+  const locale = opts.locale ?? DEFAULT_LOCALE;
+  const t = (key: string, vars?: Record<string, string | number>) =>
+    translate(locale, key, vars);
+
   const formatElapsed = (s: number) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -34,17 +41,15 @@ export function getDealerLine(opts: {
     const timer = ` [${formatElapsed(opts.elapsed)}]`;
     switch (opts.activeRequest) {
       case "deal":
-        return `SHUFFLING & GENERATING DEAL PROOF... (~30-60s)${timer}`;
+        return t("dealer.shuffling", { timer });
       case "flop":
-        return `GENERATING REVEAL PROOF... (~20-40s)${timer}`;
       case "turn":
-        return `GENERATING REVEAL PROOF... (~20-40s)${timer}`;
       case "river":
-        return `GENERATING REVEAL PROOF... (~20-40s)${timer}`;
+        return t("dealer.revealProof", { timer });
       case "showdown":
-        return `VERIFYING SHOWDOWN — THIS TAKES 2-4 MINUTES. PLEASE WAIT.${timer}`;
+        return t("dealer.showdown", { timer });
       default:
-        return `One moment...${timer}`;
+        return t("dealer.oneMoment", { timer });
     }
   }
 
@@ -53,61 +58,61 @@ export function getDealerLine(opts: {
   }
 
   if (opts.onChainPhase === "DealingFlop") {
-    return "Betting round complete. Dealer is revealing the flop...";
+    return t("dealer.dealingFlop");
   }
   if (opts.onChainPhase === "DealingTurn") {
-    return "Betting round complete. Dealer is revealing the turn...";
+    return t("dealer.dealingTurn");
   }
   if (opts.onChainPhase === "DealingRiver") {
-    return "Betting round complete. Dealer is revealing the river...";
+    return t("dealer.dealingRiver");
   }
   if (opts.onChainPhase === "Showdown") {
-    return "Betting complete. Dealer is resolving showdown...";
+    return t("dealer.resolvingShowdown");
   }
 
   if (opts.playMode !== "single" && opts.wallet && !opts.isWalletSeated && opts.seatedAddresses.length > 0) {
-    return `On-chain seats are ${opts.tableSeatLabel}. Click JOIN TABLE to take a seat with this wallet.`;
+    return t("dealer.joinPrompt", { seats: opts.tableSeatLabel });
   }
 
   switch (opts.gamePhase) {
     case "waiting":
       if (opts.playMode === "single") {
-        return "Solo vs AI uses fake chips (100 each). Click DEAL CARDS to start.";
+        return t("dealer.soloStart");
       }
       if (opts.playMode === "headsup") {
         if ((opts.lobby?.joined_wallets ?? 0) < 2) {
-          return "Two-player mode needs 2 joined wallets. Share table ID and wait for one join.";
+          return t("dealer.headsUpWait");
         }
-        return "Heads-up is ready. Click DEAL CARDS.";
+        return t("dealer.headsUpReady");
       }
       if ((opts.lobby?.joined_wallets ?? 0) < 3) {
-        return "3-6 player mode needs at least 3 joined wallets.";
+        return t("dealer.multiWait");
       }
-      return "Multi-player table is ready. Click DEAL CARDS.";
+      return t("dealer.multiReady");
     case "dealing":
-      return "Cards are being dealt.";
+      return t("dealer.dealing");
     case "preflop":
-      return "Preflop is live. Place your bet; dealer auto-reveals next street.";
+      return t("dealer.preflop");
     case "flop":
-      return "Flop is out. Place your bet; dealer auto-reveals turn.";
+      return t("dealer.flop");
     case "turn":
-      return "Turn is out. Place your bet; dealer auto-reveals river.";
+      return t("dealer.turn");
     case "river":
-      return "River is out. Final betting round; dealer auto-runs showdown.";
+      return t("dealer.river");
     case "showdown":
-      return "Showdown in progress.";
+      return t("dealer.showdownLive");
     case "settlement":
       if (opts.winnerAddress) {
         if (opts.userAddress && opts.winnerAddress === opts.userAddress) {
-          return "Hand complete. YOU WIN!";
+          return t("dealer.youWin");
         }
         if (opts.playMode === "single" && opts.userAddress && opts.winnerAddress !== opts.userAddress) {
-          return "Hand complete. AI WINS!";
+          return t("dealer.aiWins");
         }
-        return `Hand complete. Winner: ${shortAddr(opts.winnerAddress)}.`;
+        return t("dealer.winner", { addr: shortAddr(opts.winnerAddress) });
       }
-      return "Hand complete. Start the next hand when ready.";
+      return t("dealer.handComplete");
     default:
-      return "Ready when you are.";
+      return t("dealer.ready");
   }
 }

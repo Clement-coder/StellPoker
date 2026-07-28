@@ -76,6 +76,8 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
             all_in: g.all_in,
             sitting_out: false,
             seat_index: seat as u32,
+            total_buy_in: 0,
+            rebuy_count: 0,
         });
     }
     let admin = Address::generate(env);
@@ -86,8 +88,7 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
             token: admin.clone(),
             min_buy_in: 0,
             max_buy_in: i128::MAX,
-            small_blind: 0,
-            big_blind: 0,
+            blinds_schedule: BlindsSchedule::fixed(env, 0, 0),
             min_players: 2,
             max_players: 9,
             timeout_ledgers: 0,
@@ -95,6 +96,10 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
             verifier: admin.clone(),
             game_hub: admin.clone(),
             rake_bps: 0,
+            max_rebuys: 0,
+            jackpot_rake_share_bps: 0,
+            min_bad_beat_category: 7,
+            min_bad_beat_rank: 12,
         },
         phase: GamePhase::Showdown,
         players,
@@ -111,6 +116,13 @@ fn build_table(env: &Env, gen: &[GenPlayer]) -> (TableState, i128) {
         committee: admin,
         session_id: 0,
         rake_balance: 0,
+        action_deadline: 0,
+        hand_actions: Vec::new(env),
+        rit_state: None,
+        jackpot_balance: 0,
+        last_raise_size: 0,
+        current_blind_level: 0,
+        level_started_at: 0,
     };
     (table, total)
 }

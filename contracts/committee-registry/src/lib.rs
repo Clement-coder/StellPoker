@@ -71,36 +71,19 @@ pub struct TimeoutConfig {
     pub showdown_ledgers: u32,
 }
 
-/// Per-(delegator, node) delegation record.
-///
-/// The `debt_snapshot` is the value of `CommitteeMember::rewards_per_stake` at
-/// the moment this delegation was last checkpointed.  Pending rewards owed to
-/// the delegator equal:
-///
-///   (rewards_per_stake_now - debt_snapshot) * amount / REWARD_SCALE
+/// Snapshot of the fee pool: what is waiting to be split, what has been
+/// credited to nodes but not yet withdrawn, and the lifetime total.
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct DelegationRecord {
-    pub delegator: Address,
-    pub node: Address,
-    /// Amount currently delegated (stroop).
-    pub amount: i128,
-    /// Accumulated rewards already credited but not yet claimed (stroop).
-    pub pending_rewards: i128,
-    /// Snapshot of `CommitteeMember::rewards_per_stake` at last checkpoint.
-    pub debt_snapshot: i128,
-}
-
-/// An undelegation request waiting out the cooldown period.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct UndelegationRequest {
-    pub delegator: Address,
-    pub node: Address,
-    /// Amount to be returned once the cooldown expires.
-    pub amount: i128,
-    /// Ledger number after which the amount can be withdrawn.
-    pub unlock_ledger: u32,
+pub struct FeePoolState {
+    /// Rake deposited but not yet split among the active nodes.
+    pub undistributed: i128,
+    /// Credited to nodes and awaiting withdrawal.
+    pub pending: i128,
+    /// Total credited to nodes over the registry's lifetime.
+    pub total_distributed: i128,
+    /// Minimum balance a node must have accrued before it can withdraw.
+    pub min_withdrawal: i128,
 }
 
 #[contracttype]
@@ -117,14 +100,17 @@ pub enum RegistryKey {
     Game(u32),
     Paused,
     AllMembers,
-    /// Per-(delegator, node) active delegation record.
-    Delegation(Address, Address),
-    /// Per-(delegator, node) pending undelegation awaiting cooldown.
-    PendingUndelegation(Address, Address),
-    /// Cooldown period in ledgers before undelegated stake can be withdrawn.
-    DelegationCooldown,
-    /// Index of all delegators for a given node (for slashing propagation).
-    NodeDelegators(Address),
+    /// Rake deposited but not yet split among active nodes.
+    FeePool,
+    /// Rake credited to a node, awaiting withdrawal.
+    PendingReward(Address),
+    /// Sum of all `PendingReward` entries, so the split between stake and fees
+    /// in the contract's token balance is readable without a scan.
+    PendingTotal,
+    /// Lifetime total credited to nodes.
+    TotalDistributed,
+    /// Minimum accrued balance before a node may withdraw.
+    MinWithdrawal,
 }
 
 /// Fixed-point scale for `rewards_per_stake`. Using 1e12 gives sub-stroop
@@ -607,6 +593,203 @@ impl CommitteeRegistryContract {
             .expect("not a member")
     }
 
+    // ========================================================================
+    // Fee distribution
+    //
+    // Rake collected by a poker table is paid into this registry and split
+    // among the active MPC nodes in proportion to their stake — the nodes that
+    // have the most at risk from a slash earn the most for the work. Deposit,
+    // distribution and withdrawal are three separate steps so that a table can
+    // pay in cheaply, the split runs once per batch rather than once per
+    // deposit, and a node chooses when to take its balance out.
+    // ========================================================================
+
+    /// Pay collected rake into the fee pool.
+    ///
+    /// `from` is whoever holds the rake — typically a table admin who has just
+    /// called `withdraw_rake` on a poker table. The chips sit in the pool until
+    /// `distribute_fees` splits them.
+    pub fn deposit_rake(env: Env, from: Address, amount: i128) {
+        from.require_auth();
+        Self::require_not_paused(&env);
+        assert!(amount > 0, "deposit must be positive");
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::StakeToken)
+            .expect("not initialized");
+        let token = token::Client::new(&env, &token_addr);
+        token.transfer(&from, &env.current_contract_address(), &amount);
+
+        let pool = Self::fee_pool(&env) + amount;
+        env.storage().instance().set(&RegistryKey::FeePool, &pool);
+
+        env.events()
+            .publish((Symbol::new(&env, "rake_deposited"),), (from, amount, pool));
+    }
+
+    /// Split the fee pool among the active committee members, proportional to
+    /// stake. Returns the amount credited.
+    ///
+    /// Permissionless: it only moves the pool into per-node ledgers by a fixed
+    /// rule, so there is nothing to gain by calling it (or by withholding it).
+    ///
+    /// Each node's share is `floor(pool * stake / total_stake)`. The floors
+    /// leave a few stroops of dust, which stay in the pool and roll into the
+    /// next distribution rather than being stranded.
+    pub fn distribute_fees(env: Env) -> i128 {
+        Self::require_not_paused(&env);
+
+        let pool = Self::fee_pool(&env);
+        if pool <= 0 {
+            return 0;
+        }
+
+        let members = Self::get_active_members(env.clone());
+        let mut total_stake: i128 = 0;
+        for i in 0..members.len() {
+            total_stake += members.get(i).unwrap().stake;
+        }
+        // With nobody to pay, the pool waits for the next epoch rather than
+        // being burned.
+        if total_stake <= 0 {
+            return 0;
+        }
+
+        let mut distributed: i128 = 0;
+        for i in 0..members.len() {
+            let m = members.get(i).unwrap();
+            let share = pool * m.stake / total_stake;
+            if share <= 0 {
+                continue;
+            }
+            Self::credit_reward(&env, &m.address, share);
+            distributed += share;
+        }
+
+        // Dust from the floors rolls over.
+        env.storage()
+            .instance()
+            .set(&RegistryKey::FeePool, &(pool - distributed));
+
+        let total: i128 = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::TotalDistributed)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&RegistryKey::TotalDistributed, &(total + distributed));
+
+        let pending: i128 = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::PendingTotal)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&RegistryKey::PendingTotal, &(pending + distributed));
+
+        env.events().publish(
+            (Symbol::new(&env, "fees_distributed"),),
+            (distributed, members.len(), pool - distributed),
+        );
+        distributed
+    }
+
+    /// Withdraw a node's accrued fees. Returns the amount transferred.
+    ///
+    /// The balance must have reached `min_withdrawal`, which keeps nodes from
+    /// paying more in transaction fees than a dust payout is worth. A node that
+    /// has been deregistered or slashed can still withdraw what it earned while
+    /// it was active.
+    pub fn withdraw_rewards(env: Env, member: Address) -> i128 {
+        member.require_auth();
+        Self::require_not_paused(&env);
+
+        let amount = Self::get_pending_reward(env.clone(), member.clone());
+        let threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::MinWithdrawal)
+            .unwrap_or(0);
+        assert!(amount > 0, "nothing to withdraw");
+        assert!(amount >= threshold, "below minimum withdrawal");
+
+        env.storage()
+            .persistent()
+            .set(&RegistryKey::PendingReward(member.clone()), &0i128);
+        let pending: i128 = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::PendingTotal)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&RegistryKey::PendingTotal, &(pending - amount));
+
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&RegistryKey::StakeToken)
+            .expect("not initialized");
+        let token = token::Client::new(&env, &token_addr);
+        token.transfer(&env.current_contract_address(), &member, &amount);
+
+        env.events().publish(
+            (Symbol::new(&env, "rewards_withdrawn"),),
+            (member, amount),
+        );
+        amount
+    }
+
+    /// Set the minimum balance a node must accrue before withdrawing (admin
+    /// only). `0` disables the threshold.
+    pub fn set_min_withdrawal(env: Env, admin: Address, min_withdrawal: i128) {
+        admin.require_auth();
+        Self::require_admin(&env, &admin);
+        assert!(min_withdrawal >= 0, "threshold cannot be negative");
+
+        env.storage()
+            .instance()
+            .set(&RegistryKey::MinWithdrawal, &min_withdrawal);
+        env.events().publish(
+            (Symbol::new(&env, "min_withdrawal_updated"),),
+            min_withdrawal,
+        );
+    }
+
+    /// Fees credited to a node and awaiting withdrawal.
+    pub fn get_pending_reward(env: Env, member: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&RegistryKey::PendingReward(member))
+            .unwrap_or(0)
+    }
+
+    /// Fee pool accounting in one read.
+    pub fn get_fee_pool(env: Env) -> FeePoolState {
+        FeePoolState {
+            undistributed: Self::fee_pool(&env),
+            pending: env
+                .storage()
+                .instance()
+                .get(&RegistryKey::PendingTotal)
+                .unwrap_or(0),
+            total_distributed: env
+                .storage()
+                .instance()
+                .get(&RegistryKey::TotalDistributed)
+                .unwrap_or(0),
+            min_withdrawal: env
+                .storage()
+                .instance()
+                .get(&RegistryKey::MinWithdrawal)
+                .unwrap_or(0),
+        }
+    }
+
     pub fn get_timeout_config(env: Env) -> TimeoutConfig {
         env.storage()
             .instance()
@@ -621,18 +804,7 @@ impl CommitteeRegistryContract {
             .expect("game not tracked")
     }
 
-    // -------------------------------------------------------------------------
-    // Stake delegation
-    // -------------------------------------------------------------------------
-
-    /// Delegate `amount` of stake tokens to a committee node.
-    ///
-    /// The delegator earns a share of fees distributed to the node (minus the
-    /// node's `fee_rate_bps` commission).  Multiple calls by the same delegator
-    /// to the same node accumulate; the reward checkpoint is updated on each
-    /// call so pending rewards are never lost.
-    pub fn delegate(env: Env, delegator: Address, node: Address, amount: i128) {
-        delegator.require_auth();
+    fn require_not_paused(env: &Env) {
         assert!(
             !env.storage()
                 .instance()
@@ -640,345 +812,20 @@ impl CommitteeRegistryContract {
                 .unwrap_or(false),
             "contract paused"
         );
-        assert!(amount > 0, "amount must be positive");
-
-        let mut m: CommitteeMember = env
-            .storage()
-            .persistent()
-            .get(&RegistryKey::Member(node.clone()))
-            .expect("node not registered");
-        assert!(m.active, "node not active");
-
-        // Pull tokens from the delegator into this contract.
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&RegistryKey::StakeToken)
-            .unwrap();
-        let token = token::Client::new(&env, &token_addr);
-        token.transfer(&delegator, &env.current_contract_address(), &amount);
-
-        // Load or initialise the delegation record, checkpoint rewards first.
-        let key = RegistryKey::Delegation(delegator.clone(), node.clone());
-        let mut rec: DelegationRecord = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(DelegationRecord {
-                delegator: delegator.clone(),
-                node: node.clone(),
-                amount: 0,
-                pending_rewards: 0,
-                debt_snapshot: m.rewards_per_stake,
-            });
-
-        // Settle any rewards earned on the *existing* amount before changing it.
-        rec.pending_rewards += Self::calc_pending(&rec, m.rewards_per_stake);
-        rec.debt_snapshot = m.rewards_per_stake;
-        rec.amount += amount;
-
-        env.storage().persistent().set(&key, &rec);
-
-        // Update node totals.
-        m.total_delegated_stake += amount;
-        env.storage()
-            .persistent()
-            .set(&RegistryKey::Member(node.clone()), &m);
-
-        // Maintain the node → delegator index so slashing can iterate them.
-        let idx_key = RegistryKey::NodeDelegators(node.clone());
-        let mut delegators: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&idx_key)
-            .unwrap_or_else(|| Vec::new(&env));
-        let mut already_indexed = false;
-        for i in 0..delegators.len() {
-            if delegators.get(i).unwrap() == delegator {
-                already_indexed = true;
-                break;
-            }
-        }
-        if !already_indexed {
-            delegators.push_back(delegator.clone());
-            env.storage().persistent().set(&idx_key, &delegators);
-        }
-
-        env.events().publish(
-            (Symbol::new(&env, "delegated"), node),
-            (delegator, amount),
-        );
     }
 
-    /// Begin the undelegation process.  The `amount` is removed from the
-    /// active delegation immediately (stopping reward accrual on it) and
-    /// placed in a `PendingUndelegation` record.  Only one pending undelegation
-    /// per (delegator, node) pair is allowed at a time; call
-    /// `withdraw_undelegation` first if one already exists.
-    pub fn undelegate(env: Env, delegator: Address, node: Address, amount: i128) {
-        delegator.require_auth();
-        assert!(
-            !env.storage()
-                .instance()
-                .get::<RegistryKey, bool>(&RegistryKey::Paused)
-                .unwrap_or(false),
-            "contract paused"
-        );
-        assert!(amount > 0, "amount must be positive");
-
-        assert!(
-            !env.storage()
-                .persistent()
-                .has(&RegistryKey::PendingUndelegation(
-                    delegator.clone(),
-                    node.clone()
-                )),
-            "existing undelegation pending; withdraw first"
-        );
-
-        let mut m: CommitteeMember = env
-            .storage()
-            .persistent()
-            .get(&RegistryKey::Member(node.clone()))
-            .expect("node not registered");
-
-        let del_key = RegistryKey::Delegation(delegator.clone(), node.clone());
-        let mut rec: DelegationRecord = env
-            .storage()
-            .persistent()
-            .get(&del_key)
-            .expect("no active delegation");
-        assert!(rec.amount >= amount, "insufficient delegated amount");
-
-        // Checkpoint rewards on the full amount before reducing it.
-        rec.pending_rewards += Self::calc_pending(&rec, m.rewards_per_stake);
-        rec.debt_snapshot = m.rewards_per_stake;
-        rec.amount -= amount;
-
-        if rec.amount == 0 {
-            env.storage().persistent().remove(&del_key);
-        } else {
-            env.storage().persistent().set(&del_key, &rec);
-        }
-
-        // Update node totals.
-        m.total_delegated_stake -= amount;
-        env.storage()
-            .persistent()
-            .set(&RegistryKey::Member(node.clone()), &m);
-
-        // Create the pending undelegation.
-        let cooldown: u32 = env
-            .storage()
-            .instance()
-            .get(&RegistryKey::DelegationCooldown)
-            .unwrap_or(0);
-        let unlock_ledger = env.ledger().sequence() + cooldown;
-        let pending = UndelegationRequest {
-            delegator: delegator.clone(),
-            node: node.clone(),
-            amount,
-            unlock_ledger,
-        };
-        env.storage().persistent().set(
-            &RegistryKey::PendingUndelegation(delegator.clone(), node.clone()),
-            &pending,
-        );
-
-        env.events().publish(
-            (Symbol::new(&env, "undelegation_started"), node),
-            (delegator, amount, unlock_ledger),
-        );
-    }
-
-    /// Withdraw tokens from a completed undelegation once the cooldown has elapsed.
-    pub fn withdraw_undelegation(env: Env, delegator: Address, node: Address) -> i128 {
-        delegator.require_auth();
-
-        let pend_key = RegistryKey::PendingUndelegation(delegator.clone(), node.clone());
-        let pending: UndelegationRequest = env
-            .storage()
-            .persistent()
-            .get(&pend_key)
-            .expect("no pending undelegation");
-
-        assert!(
-            env.ledger().sequence() >= pending.unlock_ledger,
-            "cooldown not elapsed"
-        );
-
-        let amount = pending.amount;
-        env.storage().persistent().remove(&pend_key);
-
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&RegistryKey::StakeToken)
-            .unwrap();
-        let token = token::Client::new(&env, &token_addr);
-        token.transfer(&env.current_contract_address(), &delegator, &amount);
-
-        env.events().publish(
-            (Symbol::new(&env, "undelegation_withdrawn"), node),
-            (delegator, amount),
-        );
-
-        amount
-    }
-
-    /// Claim all pending rewards for a delegator from a specific node.
-    /// Returns the amount transferred.
-    pub fn claim_rewards(env: Env, delegator: Address, node: Address) -> i128 {
-        delegator.require_auth();
-
-        let m: CommitteeMember = env
-            .storage()
-            .persistent()
-            .get(&RegistryKey::Member(node.clone()))
-            .expect("node not registered");
-
-        let del_key = RegistryKey::Delegation(delegator.clone(), node.clone());
-        let mut rec: DelegationRecord = env
-            .storage()
-            .persistent()
-            .get(&del_key)
-            .expect("no active delegation");
-
-        // Settle latest rewards.
-        let fresh = Self::calc_pending(&rec, m.rewards_per_stake);
-        let total = rec.pending_rewards + fresh;
-        assert!(total > 0, "no rewards to claim");
-
-        rec.pending_rewards = 0;
-        rec.debt_snapshot = m.rewards_per_stake;
-        env.storage().persistent().set(&del_key, &rec);
-
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&RegistryKey::StakeToken)
-            .unwrap();
-        let token = token::Client::new(&env, &token_addr);
-        token.transfer(&env.current_contract_address(), &delegator, &total);
-
-        env.events().publish(
-            (Symbol::new(&env, "rewards_claimed"), node),
-            (delegator, total),
-        );
-
-        total
-    }
-
-    /// Distribute `amount` tokens from the caller as fees for a node.
-    ///
-    /// The node-operator portion (`fee_rate_bps` of `amount`) is transferred
-    /// directly to the node address.  The remainder increases
-    /// `rewards_per_stake` so delegators can claim it pro-rata.
-    ///
-    /// If the node has no delegators, the entire amount goes to the node.
-    pub fn distribute_fees(env: Env, payer: Address, node: Address, amount: i128) {
-        payer.require_auth();
-        assert!(amount > 0, "amount must be positive");
-
-        let mut m: CommitteeMember = env
-            .storage()
-            .persistent()
-            .get(&RegistryKey::Member(node.clone()))
-            .expect("node not registered");
-        assert!(m.active, "node not active");
-
-        let token_addr: Address = env
-            .storage()
-            .instance()
-            .get(&RegistryKey::StakeToken)
-            .unwrap();
-        let token = token::Client::new(&env, &token_addr);
-        token.transfer(&payer, &env.current_contract_address(), &amount);
-
-        // Split: node commission vs. delegator share.
-        let node_share = amount * m.fee_rate_bps as i128 / 10_000;
-        let delegator_total = amount - node_share;
-
-        // Pay the node operator directly.
-        if node_share > 0 {
-            token.transfer(&env.current_contract_address(), &node, &node_share);
-        }
-
-        // Increase rewards_per_stake for all current delegators.
-        if delegator_total > 0 && m.total_delegated_stake > 0 {
-            m.rewards_per_stake += delegator_total * REWARD_SCALE / m.total_delegated_stake;
-        } else if delegator_total > 0 {
-            // No delegators — extra goes to the node operator.
-            token.transfer(&env.current_contract_address(), &node, &delegator_total);
-        }
-
-        env.storage()
-            .persistent()
-            .set(&RegistryKey::Member(node.clone()), &m);
-
-        env.events().publish(
-            (Symbol::new(&env, "fees_distributed"), node),
-            (payer, amount, node_share, delegator_total),
-        );
-    }
-
-    /// Return the active delegation record for (delegator, node), if any.
-    pub fn get_delegation(
-        env: Env,
-        delegator: Address,
-        node: Address,
-    ) -> Option<DelegationRecord> {
-        env.storage()
-            .persistent()
-            .get(&RegistryKey::Delegation(delegator, node))
-    }
-
-    /// Return the pending undelegation request for (delegator, node), if any.
-    pub fn get_pending_undelegation(
-        env: Env,
-        delegator: Address,
-        node: Address,
-    ) -> Option<UndelegationRequest> {
-        env.storage()
-            .persistent()
-            .get(&RegistryKey::PendingUndelegation(delegator, node))
-    }
-
-    /// View unclaimed rewards for a delegator without mutating state.
-    pub fn pending_rewards(env: Env, delegator: Address, node: Address) -> i128 {
-        let m: CommitteeMember = env
-            .storage()
-            .persistent()
-            .get(&RegistryKey::Member(node.clone()))
-            .expect("node not registered");
-        let del_key = RegistryKey::Delegation(delegator.clone(), node);
-        let rec: DelegationRecord = match env.storage().persistent().get(&del_key) {
-            Some(r) => r,
-            None => return 0,
-        };
-        rec.pending_rewards + Self::calc_pending(&rec, m.rewards_per_stake)
-    }
-
-    /// Admin can update the delegation cooldown period.
-    pub fn set_delegation_cooldown(env: Env, admin: Address, cooldown_ledgers: u32) {
-        admin.require_auth();
-        Self::require_admin(&env, &admin);
+    fn fee_pool(env: &Env) -> i128 {
         env.storage()
             .instance()
-            .set(&RegistryKey::DelegationCooldown, &cooldown_ledgers);
-        env.events().publish(
-            (Symbol::new(&env, "cooldown_updated"),),
-            cooldown_ledgers,
-        );
+            .get(&RegistryKey::FeePool)
+            .unwrap_or(0)
     }
 
-    /// Compute rewards accrued on `rec` up to `current_rps` without writing.
-    fn calc_pending(rec: &DelegationRecord, current_rps: i128) -> i128 {
-        let delta = current_rps.saturating_sub(rec.debt_snapshot);
-        if delta <= 0 || rec.amount <= 0 {
-            return 0;
-        }
-        rec.amount * delta / REWARD_SCALE
+    /// Add `amount` to a node's withdrawable balance.
+    fn credit_reward(env: &Env, member: &Address, amount: i128) {
+        let key = RegistryKey::PendingReward(member.clone());
+        let current: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage().persistent().set(&key, &(current + amount));
     }
 
     fn require_admin(env: &Env, admin: &Address) {
@@ -1149,22 +996,6 @@ mod test {
         }
     }
 
-    fn setup_paused() -> (
-        Env,
-        CommitteeRegistryContractClient<'static>,
-        Address,
-    ) {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(CommitteeRegistryContract, ());
-        let client = CommitteeRegistryContractClient::new(&env, &contract_id);
-        let token_admin = Address::generate(&env);
-        let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
-        let admin = Address::generate(&env);
-        client.initialize(&admin, &sac.address(), &100, &0);
-        (env, client, admin)
-    }
-
     #[test]
     fn get_active_members_returns_all_registered() {
         let s = setup();
@@ -1238,6 +1069,247 @@ mod test {
         assert!(game.resolved);
     }
 
+    // -----------------------------------------------------------------------
+    // Fee distribution (#73)
+    // -----------------------------------------------------------------------
+
+    /// Register an extra active member with the given stake and return it.
+    fn add_member(s: &Setup, stake: i128, label: &str) -> Address {
+        let member = Address::generate(&s.env);
+        StellarAssetClient::new(&s.env, &s.token.address).mint(&member, &stake);
+        s.client.register_member(
+            &member,
+            &stake,
+            &String::from_str(&s.env, label),
+            &String::from_str(&s.env, "us-east-1"),
+        );
+        member
+    }
+
+    /// Mint `amount` to a fresh payer and deposit it as rake.
+    fn deposit(s: &Setup, amount: i128) -> Address {
+        let payer = Address::generate(&s.env);
+        StellarAssetClient::new(&s.env, &s.token.address).mint(&payer, &amount);
+        s.client.deposit_rake(&payer, &amount);
+        payer
+    }
+
+    #[test]
+    fn deposit_rake_accumulates_in_the_pool() {
+        let s = setup();
+        deposit(&s, 400);
+        deposit(&s, 600);
+
+        let pool = s.client.get_fee_pool();
+        assert_eq!(pool.undistributed, 1_000);
+        assert_eq!(pool.pending, 0);
+        assert_eq!(pool.total_distributed, 0);
+    }
+
+    #[test]
+    fn distribute_fees_splits_proportionally_to_stake() {
+        let s = setup();
+        // s.member already staked 1_000; add a node with three times that.
+        let big = add_member(&s, 3_000, "node-1");
+
+        deposit(&s, 1_000);
+        let distributed = s.client.distribute_fees();
+        assert_eq!(distributed, 1_000);
+
+        // 1_000 * 1_000 / 4_000 = 250, and 1_000 * 3_000 / 4_000 = 750.
+        assert_eq!(s.client.get_pending_reward(&s.member), 250);
+        assert_eq!(s.client.get_pending_reward(&big), 750);
+
+        let pool = s.client.get_fee_pool();
+        assert_eq!(pool.undistributed, 0);
+        assert_eq!(pool.pending, 1_000);
+        assert_eq!(pool.total_distributed, 1_000);
+    }
+
+    #[test]
+    fn distribute_fees_rolls_dust_into_the_next_round() {
+        let s = setup();
+        add_member(&s, 1_000, "node-1");
+        add_member(&s, 1_000, "node-2");
+
+        // 10 does not divide evenly by three equal stakes: 3 each, 1 left over.
+        deposit(&s, 10);
+        assert_eq!(s.client.distribute_fees(), 9);
+        assert_eq!(s.client.get_fee_pool().undistributed, 1);
+
+        // The stranded stroop is picked up by the next distribution.
+        deposit(&s, 2);
+        assert_eq!(s.client.distribute_fees(), 3);
+        assert_eq!(s.client.get_fee_pool().undistributed, 0);
+    }
+
+    #[test]
+    fn distribute_fees_skips_inactive_nodes() {
+        let s = setup();
+        let other = add_member(&s, 1_000, "node-1");
+
+        // Knock the original member out of the active set.
+        s.client.deregister_node_on_failure(&s.admin, &s.member);
+
+        deposit(&s, 500);
+        assert_eq!(s.client.distribute_fees(), 500);
+        assert_eq!(s.client.get_pending_reward(&s.member), 0);
+        assert_eq!(s.client.get_pending_reward(&other), 500);
+    }
+
+    #[test]
+    fn distribute_fees_is_a_noop_without_active_stake() {
+        let s = setup();
+        s.client.deregister_node_on_failure(&s.admin, &s.member);
+
+        deposit(&s, 500);
+        assert_eq!(s.client.distribute_fees(), 0);
+        // Nothing is burned; the pool waits for the next epoch.
+        assert_eq!(s.client.get_fee_pool().undistributed, 500);
+    }
+
+    #[test]
+    fn distribute_fees_on_an_empty_pool_is_free() {
+        let s = setup();
+        assert_eq!(s.client.distribute_fees(), 0);
+        assert_eq!(s.client.get_fee_pool().total_distributed, 0);
+    }
+
+    #[test]
+    fn withdraw_rewards_pays_out_and_clears_the_balance() {
+        let s = setup();
+        deposit(&s, 800);
+        s.client.distribute_fees();
+
+        let before = s.token.balance(&s.member);
+        let paid = s.client.withdraw_rewards(&s.member);
+        assert_eq!(paid, 800);
+        assert_eq!(s.token.balance(&s.member), before + 800);
+        assert_eq!(s.client.get_pending_reward(&s.member), 0);
+        assert_eq!(s.client.get_fee_pool().pending, 0);
+    }
+
+    #[test]
+    fn withdraw_rewards_accumulates_across_distributions() {
+        let s = setup();
+        deposit(&s, 300);
+        s.client.distribute_fees();
+        deposit(&s, 200);
+        s.client.distribute_fees();
+
+        assert_eq!(s.client.get_pending_reward(&s.member), 500);
+        assert_eq!(s.client.withdraw_rewards(&s.member), 500);
+    }
+
+    #[test]
+    #[should_panic(expected = "below minimum withdrawal")]
+    fn withdraw_rewards_enforces_the_minimum_threshold() {
+        let s = setup();
+        s.client.set_min_withdrawal(&s.admin, &1_000);
+
+        deposit(&s, 100);
+        s.client.distribute_fees();
+        s.client.withdraw_rewards(&s.member);
+    }
+
+    #[test]
+    fn withdraw_rewards_succeeds_once_the_threshold_is_reached() {
+        let s = setup();
+        s.client.set_min_withdrawal(&s.admin, &1_000);
+        assert_eq!(s.client.get_fee_pool().min_withdrawal, 1_000);
+
+        deposit(&s, 600);
+        s.client.distribute_fees();
+        deposit(&s, 400);
+        s.client.distribute_fees();
+
+        assert_eq!(s.client.withdraw_rewards(&s.member), 1_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "nothing to withdraw")]
+    fn withdraw_rewards_with_no_balance_reverts() {
+        let s = setup();
+        s.client.withdraw_rewards(&s.member);
+    }
+
+    #[test]
+    fn slashed_node_keeps_fees_it_already_earned() {
+        let s = setup();
+        let other = add_member(&s, 1_000, "node-1");
+        deposit(&s, 1_000);
+        s.client.distribute_fees();
+        assert_eq!(s.client.get_pending_reward(&s.member), 500);
+
+        // Being knocked out stops future earnings but does not confiscate the
+        // fees already credited for work performed.
+        s.client.deregister_node_on_failure(&s.admin, &s.member);
+        assert_eq!(s.client.withdraw_rewards(&s.member), 500);
+
+        // Subsequent rake goes entirely to the node still on duty.
+        deposit(&s, 400);
+        s.client.distribute_fees();
+        assert_eq!(s.client.get_pending_reward(&s.member), 0);
+        assert_eq!(
+            s.client.get_pending_reward(&other),
+            900,
+            "500 from the first split plus the whole 400 from the second"
+        );
+    }
+
+    #[test]
+    fn fees_never_draw_down_staked_collateral() {
+        let s = setup();
+        let contract = s.client.address.clone();
+        // Only the member's 1_000 stake is held so far.
+        assert_eq!(s.token.balance(&contract), 1_000);
+
+        deposit(&s, 700);
+        assert_eq!(s.token.balance(&contract), 1_700);
+
+        s.client.distribute_fees();
+        s.client.withdraw_rewards(&s.member);
+
+        // The stake is untouched — only the deposited rake left the contract.
+        assert_eq!(s.token.balance(&contract), 1_000);
+        assert_eq!(s.client.get_member(&s.member).stake, 1_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "deposit must be positive")]
+    fn deposit_rake_rejects_non_positive_amounts() {
+        let s = setup();
+        let payer = Address::generate(&s.env);
+        s.client.deposit_rake(&payer, &0);
+    }
+
+    #[test]
+    #[should_panic(expected = "not admin")]
+    fn set_min_withdrawal_is_admin_only() {
+        let s = setup();
+        let stranger = Address::generate(&s.env);
+        s.client.set_min_withdrawal(&stranger, &10);
+    }
+
+    #[test]
+    #[should_panic(expected = "contract paused")]
+    fn paused_registry_blocks_fee_distribution() {
+        let s = setup();
+        deposit(&s, 100);
+        s.client.pause(&s.admin);
+        s.client.distribute_fees();
+    }
+
+    #[test]
+    #[should_panic(expected = "contract paused")]
+    fn paused_registry_blocks_reward_withdrawal() {
+        let s = setup();
+        deposit(&s, 100);
+        s.client.distribute_fees();
+        s.client.pause(&s.admin);
+        s.client.withdraw_rewards(&s.member);
+    }
+
     #[test]
     #[should_panic(expected = "timeout not reached")]
     fn report_timeout_before_window_reverts() {
@@ -1257,51 +1329,21 @@ mod test_paused {
     use super::*;
     use soroban_sdk::{
         testutils::Address as _,
-        token::{StellarAssetClient, TokenClient},
+        token::StellarAssetClient,
         Address, Env, String, Vec,
     };
 
-    fn setup_paused() -> (
-        Env,
-        CommitteeRegistryContractClient<'static>,
-        Address,
-    ) {
+    /// A freshly initialized registry with no members yet.
+    fn setup_paused() -> (Env, CommitteeRegistryContractClient<'static>, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register(CommitteeRegistryContract, ());
         let client = CommitteeRegistryContractClient::new(&env, &contract_id);
         let token_admin = Address::generate(&env);
-        let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
+        let sac = env.register_stellar_asset_contract_v2(token_admin);
         let admin = Address::generate(&env);
-        client.initialize(&admin, &sac.address(), &100, &0);
+        client.initialize(&admin, &sac.address(), &100);
         (env, client, admin)
-    }
-
-    fn setup() -> (
-        Env,
-        CommitteeRegistryContractClient<'static>,
-        Address,
-        TokenClient<'static>,
-    ) {
-        let env = Env::default();
-        env.mock_all_auths();
-        let contract_id = env.register(CommitteeRegistryContract, ());
-        let client = CommitteeRegistryContractClient::new(&env, &contract_id);
-
-        let token_admin = Address::generate(&env);
-        let sac = env.register_stellar_asset_contract_v2(token_admin.clone());
-        let token = TokenClient::new(&env, &sac.address());
-        let token_sac = StellarAssetClient::new(&env, &sac.address());
-
-        let admin = Address::generate(&env);
-        client.initialize(&admin, &sac.address(), &100, &0);
-
-        // Mint tokens for a member
-        let member = Address::generate(&env);
-        token_sac.mint(&member, &1000);
-        let _ = member; // avoid unused warning; caller mints their own
-
-        (env, client, admin, token)
     }
 
     #[test]

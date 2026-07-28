@@ -112,6 +112,36 @@ function toActionScVal(action: BettingAction, amount?: number): xdr.ScVal {
   return xdr.ScVal.scvVec(values);
 }
 
+/**
+ * Per-account submission queue.
+ *
+ * A Stellar transaction is signed against the account's current sequence
+ * number, and the network accepts exactly one transaction per sequence. Now
+ * that a wallet can be seated at several tables at once (#72), two tables can
+ * easily fire an action in the same tick — both would read the same sequence
+ * from `getAccount` and the second would be rejected with `txBAD_SEQ`.
+ *
+ * Chaining submissions per source account means each one reads the sequence
+ * only after the previous transaction has been sent, so the numbers never
+ * collide. Different wallets never block each other, and the chain is
+ * per-address rather than global so multi-table play stays responsive.
+ *
+ * The chain deliberately survives failures: `.catch(() => {})` keeps a rejected
+ * submission from poisoning every later one, while the caller still sees the
+ * original rejection.
+ */
+const submissionQueues = new Map<string, Promise<unknown>>();
+
+function enqueueForAccount<T>(address: string, task: () => Promise<T>): Promise<T> {
+  const previous = submissionQueues.get(address) ?? Promise.resolve();
+  const result = previous.then(task, task);
+  submissionQueues.set(
+    address,
+    result.catch(() => {})
+  );
+  return result;
+}
+
 async function submitWalletTx(
   wallet: WalletSession,
   method: string,
@@ -119,31 +149,38 @@ async function submitWalletTx(
 ): Promise<string | undefined> {
   const cfg = await getConfig();
   const server = new rpc.Server(cfg.rpcUrl, { allowHttp: cfg.rpcUrl.startsWith("http://") });
-  const account = await server.getAccount(wallet.address);
-  const contract = new Contract(cfg.pokerTableContract);
 
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: cfg.networkPassphrase,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(60)
-    .build();
+  // Only reading the sequence through to sending has to be serialized. Waiting
+  // for confirmation does not, so two tables can have transactions in flight at
+  // the same time and neither blocks the other's turn.
+  const sent = await enqueueForAccount(wallet.address, async () => {
+    const account = await server.getAccount(wallet.address);
+    const contract = new Contract(cfg.pokerTableContract);
 
-  const prepared = await server.prepareTransaction(tx);
-  const signedXdr = await signWithWallet(wallet, prepared.toXDR(), {
-    networkPassphrase: cfg.networkPassphrase,
-    address: wallet.address,
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: cfg.networkPassphrase,
+    })
+      .addOperation(contract.call(method, ...args))
+      .setTimeout(60)
+      .build();
+
+    const prepared = await server.prepareTransaction(tx);
+    const signedXdr = await signWithWallet(wallet, prepared.toXDR(), {
+      networkPassphrase: cfg.networkPassphrase,
+      address: wallet.address,
+    });
+
+    const signedTx = TransactionBuilder.fromXDR(
+      signedXdr,
+      cfg.networkPassphrase
+    );
+    const response = await server.sendTransaction(signedTx);
+    if (response.status === "ERROR") {
+      throw new Error("On-chain transaction rejected");
+    }
+    return response;
   });
-
-  const signedTx = TransactionBuilder.fromXDR(
-    signedXdr,
-    cfg.networkPassphrase
-  );
-  const sent = await server.sendTransaction(signedTx);
-  if (sent.status === "ERROR") {
-    throw new Error("On-chain transaction rejected");
-  }
 
   if (sent.hash) {
     const result = await server.pollTransaction(sent.hash, {
